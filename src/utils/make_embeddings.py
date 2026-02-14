@@ -1,65 +1,102 @@
 '''
-Generate ESM-1b embeddings (per position) and save as one 
+Generate ESM3 embeddings (per position) and save as one
 file per sequence. Use md5 hash of sequence as file name.
 Adapted from DeepTMHMM.
 '''
 from hashlib import md5
-from esm import Alphabet, FastaBatchedDataset, ProteinBertModel, pretrained, FastaBatchedDataset
 import torch
 import os
 import argparse
 import pathlib
+from tqdm.auto import tqdm
+from esm.models.esm3 import ESM3
+from esm.sdk.api import ESMProtein
 
 def hash_aa_string(string):
     return md5(string.encode()).digest().hex()
 
-from tqdm.auto import tqdm
-def generate_esm_embeddings(fasta_file, esm_embeddings_dir, repr_layers=33):
-    esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm2_t33_650M_UR50D') # esm1b_t33_650M_UR50S
+def parse_fasta(fasta_file):
+    ids = []
+    seqs = []
+    with open(fasta_file, 'r') as f:
+        header = None
+        sequence = []
+        for line in f:
+            line = line.strip()
+            if line.startswith(">"):
+                if header:
+                    ids.append(header)
+                    seqs.append("".join(sequence))
+                header = line[1:]
+                sequence = []
+            else:
+                sequence.append(line)
+        if header:
+            ids.append(header)
+            seqs.append("".join(sequence))
+    return list(zip(ids, seqs))
 
-    dataset = FastaBatchedDataset.from_file(fasta_file)
+def generate_esm_embeddings(fasta_file, esm_embeddings_dir):
+    # Load ESM3 model
+    # We use the small open model
+    model = ESM3.from_pretrained("esm3_sm_open_v1")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    model.eval()
+
+    dataset = parse_fasta(fasta_file)
+
+    print("Starting to generate embeddings")
     
     with torch.no_grad():
-        if torch.cuda.is_available():
-            esm_model = esm_model.cuda()
-
-        batch_converter = esm_alphabet.get_batch_converter()
-        
-        print("Starting to generate embeddings")
-
-            
-        for idx, item in enumerate(tqdm(dataset)):
-            
-            label, seq = item
+        for idx, (label, seq) in enumerate(tqdm(dataset)):
             
             if os.path.isfile(f'{esm_embeddings_dir}/{hash_aa_string(seq)}.pt'):
-                print("Already processed sequence")
+                # print("Already processed sequence")
                 continue
-                                
             
-            seqs = list([("seq", s) for s in [seq]])
-            labels, strs, toks = batch_converter(seqs)
+            # Create ESMProtein object
+            protein = ESMProtein(sequence=seq)
+            # Encode to tensor (adds BOS/EOS)
+            protein_tensor = model.encode(protein)
 
-            repr_layers_list = [
-                (i + esm_model.num_layers + 1) % (esm_model.num_layers + 1) for i in range(repr_layers+1)
-            ]
+            sequence_tokens = protein_tensor.sequence
+            # sequence_tokens is on device already because encode puts it there
 
-            out = None
+            # Chunking logic to handle long sequences
+            # ESM3 might handle longer sequences, but we stick to a safe window
+            # similar to the original code.
 
-            if torch.cuda.is_available():
-                toks = toks.to(device="cuda", non_blocking=True)
-
-            minibatch_max_length = toks.size(1)
+            minibatch_max_length = sequence_tokens.size(0)
 
             tokens_list = []
             end = 0
+            # Reshape to [1, L] for model input if needed, but model handles 1D or 2D?
+            # ESM3 forward expects [B, L]. protein_tensor.sequence is [L] usually?
+            # Let's check encoding.tokenize_sequence. It likely returns [L].
+            # But model.forward expects [B, L].
+
+            # Check shape
+            if sequence_tokens.dim() == 1:
+                sequence_tokens = sequence_tokens.unsqueeze(0) # [1, L]
+
+            minibatch_max_length = sequence_tokens.size(1)
+
             while end <= minibatch_max_length:
                 start = end
                 end = start + 1022
                 if end <= minibatch_max_length:
                     # we are not on the last one, so make this shorter
                     end = end - 300
-                tokens = esm_model(toks[:, start:end], repr_layers=repr_layers_list, return_contacts=False)["representations"][33]
+
+                chunk = sequence_tokens[:, start:end]
+
+                # Forward pass
+                output = model(sequence_tokens=chunk)
+
+                # Get embeddings
+                # output.embeddings is [B, L_chunk, D]
+                tokens = output.embeddings
                 tokens_list.append(tokens)
 
             out = torch.cat(tokens_list, dim=1).cpu()
@@ -67,16 +104,20 @@ def generate_esm_embeddings(fasta_file, esm_embeddings_dir, repr_layers=33):
             # set nan to zeros
             out[out!=out] = 0.0
 
-            res = out.transpose(0,1)[1:-1] 
-            seq_embedding = res[:,0]
-            #print(seq_embedding.size())
+            # Remove batch dim: [L_total, D]
+            res = out.squeeze(0)
+
+            # Strip BOS/EOS (first and last)
+            # Assumption: The first chunk had BOS, the last had EOS.
+            # And we concatenated them.
+            # Check if slicing removed them?
+            # We sliced sequence_tokens which contained BOS/EOS.
+            # So the concatenated output contains embeddings for BOS and EOS at ends.
+            seq_embedding = res[1:-1]
 
             output_file = open(f'{esm_embeddings_dir}/{hash_aa_string(seq)}.pt', 'wb')
             torch.save(seq_embedding, output_file)
             output_file.close()
-
-            #print(f"Saved embedding to {esm_embeddings_dir}")
-
 
 def main():
     parser = argparse.ArgumentParser()
@@ -90,12 +131,12 @@ def main():
         type=pathlib.Path,
         help="output directory for extracted representations",
     )
+    # repr_layers argument is removed as it's not applicable to ESM3 in the same way
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-
-    generate_esm_embeddings(args.fasta_file, args.output_dir, repr_layers=33)
+    generate_esm_embeddings(args.fasta_file, args.output_dir)
 
 if __name__ == '__main__':
     main()

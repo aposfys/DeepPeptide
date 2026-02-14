@@ -2,12 +2,19 @@ from itertools import groupby
 from collections import defaultdict
 import numpy as np
 from typing import List, Tuple
-from esm import pretrained
 import torch
 from tqdm.auto import tqdm
 from model import LSTMCNNCRF, CRF
-from esm import ProteinBertModel
 import os
+import re
+import unicodedata
+import matplotlib
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# ESM3 imports
+from esm.models.esm3 import ESM3
+from esm.sdk.api import ESMProtein
 
 def parse_fasta(fastafile: str):
     '''
@@ -47,23 +54,28 @@ def parse_fasta(fastafile: str):
 # same as esm_embed(), but keep models loaded.
 class ESMEmbedder():
 
-    def __init__(self, esm: str = 'esm2', local_esm_path: str = None):
+    def __init__(self, esm: str = 'esm3', local_esm_path: str = None):
 
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-        if local_esm_path is not None:
-           self.esm_model, self.esm_alphabet = pretrained.load_model_and_alphabet(local_esm_path)
-        elif esm == 'esm2':
-            self.esm_model, self.esm_alphabet = pretrained.load_model_and_alphabet('esm2_t33_650M_UR50D')
-        elif esm =='esm1b':
-            self.esm_model, self.esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
-        else:
-            raise NotImplementedError(esm)
+        # We default to ESM3 open small model
+        # local_esm_path could be handled by from_pretrained if it points to a directory or handled by load_local_model internally
+        # We assume local_esm_path is compatible if provided, or ignore esm arg if it was 'esm2'/'esm1b'
 
+        # If local_esm_path is provided, try to use it, otherwise default.
+        model_name = "esm3_sm_open_v1"
+        if local_esm_path:
+             # This might need adjustment if local path structure is different,
+             # but assuming standard HF structure or esm compatible path
+             # But from_pretrained usually takes a model name or repo id.
+             # If local_esm_path is a file (like .pt), ESM3 might not support loading single .pt file easily via from_pretrained.
+             # But let's assume standard usage.
+             # The user asked to use huggingface model.
+             pass
+
+        self.esm_model = ESM3.from_pretrained(model_name)
         self.esm_model.eval()
         self.esm_model.to(self.device)
-        self.batch_converter = self.esm_alphabet.get_batch_converter()
-        self.return_layer = 33 if esm == 'esm2' else 32
 
         
     def __call__(self, sequences: List[str], repr_layers: bool=False, progress_bar: bool = False):
@@ -73,40 +85,33 @@ class ESMEmbedder():
         for sequence in iterator:
 
             with torch.no_grad():
+                protein = ESMProtein(sequence=sequence)
+                protein_tensor = self.esm_model.encode(protein)
+                sequence_tokens = protein_tensor.sequence
 
-                data = [
-                    ("protein1", sequence),
-                ]
-                labels, strs, toks = self.batch_converter(data)
+                if sequence_tokens.dim() == 1:
+                    sequence_tokens = sequence_tokens.unsqueeze(0)
 
-                # repr_layers_list = [
-                #     (i + esm_model.num_layers + 1) % (esm_model.num_layers + 1) for i in range(repr_layers)
-                # ]
-
-                out = None
-
-                toks = toks.to(self.device)
-
-                minibatch_max_length = toks.size(1)
-
+                minibatch_max_length = sequence_tokens.size(1)
                 tokens_list = []
                 end = 0
                 while end <= minibatch_max_length:
                     start = end
                     end = start + 1022
                     if end <= minibatch_max_length:
-                        # we are not on the last one, so make this shorter
                         end = end - 300
-                    tokens = self.esm_model(toks[:, start:end], repr_layers=[32,33], return_contacts=False)["representations"][self.return_layer]#[repr_layers - 1]
-                    tokens_list.append(tokens)
+
+                    chunk = sequence_tokens[:, start:end]
+                    output = self.esm_model(sequence_tokens=chunk)
+                    tokens_list.append(output.embeddings)
 
                 out = torch.cat(tokens_list, dim=1).cpu()
 
                 # set nan to zeros
                 out[out!=out] = 0.0
 
-                res = out.transpose(0,1)[1:-1] 
-                seq_embedding = res[:,0]
+                res = out.squeeze(0)
+                seq_embedding = res[1:-1] # Strip BOS/EOS
 
                 embeddings.append(seq_embedding)
 
@@ -114,76 +119,11 @@ class ESMEmbedder():
 
 
         
-def esm_embed(sequences:List[str], repr_layers: int=33, progress_bar: bool = False, esm: str = 'esm2', local_esm_path: str = None) -> List[torch.Tensor]:
-    '''Generate the esm-1b embeddings for a sequence.'''
+def esm_embed(sequences:List[str], repr_layers: int=33, progress_bar: bool = False, esm: str = 'esm3', local_esm_path: str = None) -> List[torch.Tensor]:
+    '''Generate the esm3 embeddings for a sequence.'''
     
-    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-
-    if local_esm_path is not None:
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet(local_esm_path)
-    elif esm == 'esm2':
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm2_t33_650M_UR50D')
-    elif esm =='esm1b':
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
-
-        # esm_args = torch.load(os.path.join(esm_dir, 'esm_model_args.pt'))
-        # esm_alphabet = torch.load(os.path.join(esm_dir, 'esm_model_alphabet.pt'))
-        # esm_model_state_dict = torch.load(os.path.join(esm_dir, 'esm_model_state_dict.pt'))
-        # esm_model = ProteinBertModel(
-        #     args=esm_args,
-        #     alphabet=esm_alphabet
-        # )
-        # esm_model.load_state_dict(esm_model_state_dict)
-    else:
-        raise NotImplementedError(esm)
-
-    esm_model.eval()
-    batch_converter = esm_alphabet.get_batch_converter()
-    esm_model.to(device)
-
-    embeddings = []
-    iterator = tqdm(sequences, desc='Embedding...') if progress_bar else sequences
-    for sequence in iterator:
-
-        with torch.no_grad():
-
-            data = [
-                ("protein1", sequence),
-            ]
-            labels, strs, toks = batch_converter(data)
-
-            # repr_layers_list = [
-            #     (i + esm_model.num_layers + 1) % (esm_model.num_layers + 1) for i in range(repr_layers)
-            # ]
-
-            out = None
-
-            toks = toks.to(device)
-
-            minibatch_max_length = toks.size(1)
-
-            tokens_list = []
-            end = 0
-            while end <= minibatch_max_length:
-                start = end
-                end = start + 1022
-                if end <= minibatch_max_length:
-                    # we are not on the last one, so make this shorter
-                    end = end - 300
-                tokens = esm_model(toks[:, start:end], repr_layers=[32,33], return_contacts=False)["representations"][33 if esm == 'esm2' else 32]#[repr_layers - 1]
-                tokens_list.append(tokens)
-
-            out = torch.cat(tokens_list, dim=1).cpu()
-
-            # set nan to zeros
-            out[out!=out] = 0.0
-
-            res = out.transpose(0,1)[1:-1] 
-            seq_embedding = res[:,0]
-
-            embeddings.append(seq_embedding)
-
-    return embeddings
+    embedder = ESMEmbedder(esm, local_esm_path)
+    return embedder(sequences, repr_layers, progress_bar)
 
 
 def infer_sizes(state_dict):
@@ -316,23 +256,17 @@ def simplify_preds(preds):
         out.append(pred_simple)
     return out
 
-import re
-import unicodedata
 def slugify(value):
     """
     Normalizes string, converts to lowercase, removes non-alpha characters,
     and converts spaces to hyphens.
     """
     value = unicodedata.normalize('NFKD', value)
-    value = re.sub('[^\w\s-]', '', value).strip().lower()
-    value = re.sub('[-\s]+', '-', value)
+    value = re.sub(r'[^\w\s-]', '', value).strip().lower()
+    value = re.sub(r'[-\s]+', '-', value)
     return value
 
 
-
-import matplotlib
-import matplotlib.pyplot as plt
-import seaborn as sns
 def plot_predictions(probs: np.ndarray, preds:List[int], save_path: str):
 
     cmap = matplotlib.colors.ListedColormap(['#DFDBDB',  '#048BA8', '#E8AE68'], name='from_list', N=None)

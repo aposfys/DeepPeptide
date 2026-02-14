@@ -3,59 +3,74 @@ Generate one-hot embeddings and save as one
 file per sequence. Use md5 hash of sequence as file name.
 We do it this way so that we can just reuse the whole ESM-based setup without
 any changes aside from the input dimension.
-
 '''
 from hashlib import md5
-from esm import Alphabet, FastaBatchedDataset, ProteinBertModel, pretrained, FastaBatchedDataset
 import torch
 import os
 import argparse
 import pathlib
+from tqdm.auto import tqdm
+from esm.models.esm3 import ESM3
+from esm.sdk.api import ESMProtein
 
 def hash_aa_string(string):
     return md5(string.encode()).digest().hex()
 
-from tqdm.auto import tqdm
-def generate_esm_embeddings(fasta_file, esm_embeddings_dir, repr_layers=33):
-    esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
+def parse_fasta(fasta_file):
+    ids = []
+    seqs = []
+    with open(fasta_file, 'r') as f:
+        header = None
+        sequence = []
+        for line in f:
+            line = line.strip()
+            if line.startswith(">"):
+                if header:
+                    ids.append(header)
+                    seqs.append("".join(sequence))
+                header = line[1:]
+                sequence = []
+            else:
+                sequence.append(line)
+        if header:
+            ids.append(header)
+            seqs.append("".join(sequence))
+    return list(zip(ids, seqs))
 
-    dataset = FastaBatchedDataset.from_file(fasta_file)
+def generate_esm_embeddings(fasta_file, esm_embeddings_dir):
+    # Load ESM3 model just for tokenization
+    model = ESM3.from_pretrained("esm3_sm_open_v1")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    # model.eval() # Not needed for tokenization strictly but good practice
+
+    dataset = parse_fasta(fasta_file)
     
-    with torch.no_grad():
-        if torch.cuda.is_available():
-            #torch.cuda.set_device(1)
-            esm_model = esm_model.cuda()
+    print("Starting to generate embeddings")
 
-        batch_converter = esm_alphabet.get_batch_converter()
+    for idx, (label, seq) in enumerate(tqdm(dataset)):
         
-        print("Starting to generate embeddings")
+        # if os.path.isfile(f'{esm_embeddings_dir}/{hash_aa_string(seq)}.pt'):
+        #     print("Already processed sequence")
+        #     continue
 
-            
-        for idx, item in enumerate(tqdm(dataset)):
-            
-            label, seq = item
-            
-            # if os.path.isfile(f'{esm_embeddings_dir}/{hash_aa_string(seq)}.pt'):
-            #     print("Already processed sequence")
-            #     continue
-                                
-            #print(f"Sequence length: {len(original_aa_string)}")
-            
-            seqs = list([("seq", s) for s in [seq]])
-            labels, strs, toks = batch_converter(seqs)
+        protein = ESMProtein(sequence=seq)
+        protein_tensor = model.encode(protein)
+        toks = protein_tensor.sequence # [L]
 
-            toks = toks
+        # One-hot encode
+        # ESM3 vocab size is 64
+        seq_embedding = torch.nn.functional.one_hot(toks, num_classes=64) # [L, 64]
 
-            seq_embedding = torch.nn.functional.one_hot(toks, num_classes=33) # (1, seq_len, dim)
+        # Remove BOS/EOS
+        seq_embedding = seq_embedding[1:-1]
 
-            seq_embedding = seq_embedding[0][1:-1] 
+        # Convert to float (optional, but usually embeddings are float)
+        seq_embedding = seq_embedding.float()
 
-            output_file = open(f'{esm_embeddings_dir}/{hash_aa_string(seq)}.pt', 'wb')
-            torch.save(seq_embedding, output_file)
-            output_file.close()
-
-            #print(f"Saved embedding to {esm_embeddings_dir}")
-
+        output_file = open(f'{esm_embeddings_dir}/{hash_aa_string(seq)}.pt', 'wb')
+        torch.save(seq_embedding, output_file)
+        output_file.close()
 
 def main():
     parser = argparse.ArgumentParser()
@@ -73,8 +88,7 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-
-    generate_esm_embeddings(args.fasta_file, args.output_dir, repr_layers=33)
+    generate_esm_embeddings(args.fasta_file, args.output_dir)
 
 if __name__ == '__main__':
     main()
