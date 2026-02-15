@@ -73,6 +73,11 @@ class CRF(nn.Module):
         #self._constraint_mask = torch.nn.Parameter(constraint_mask, requires_grad=False)
         self.register_buffer('_constraint_mask', constraint_mask)
 
+        inf = torch.as_tensor(-10000000000, dtype=torch.float32)
+        self.register_buffer('_inf_matrix', torch.full(self.transitions.shape, inf))
+        if self.include_start_end_transitions:
+            self.register_buffer('_inf_vector', torch.full(self.start_transitions.shape, inf))
+
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -101,17 +106,13 @@ class CRF(nn.Module):
             self.do_transition_constraint()
 
     def do_transition_constraint(self):
-        # inf = torch.finfo(self.start_transitions.dtype).min
-        inf = torch.as_tensor(-10000000000, dtype=self.transitions.dtype)
-        # TODO could make this a buffer instead of recomputing.
-        inf_matrix = torch.empty(self.transitions.shape).fill_(inf).to(self.transitions.dtype).to(self.transitions.device)
-        self.transitions.data = torch.where(self._constraint_mask.byte(), self.transitions, inf_matrix)
+        self.transitions.data = torch.where(self._constraint_mask.byte(), self.transitions, self._inf_matrix)
+
 
         if self.include_start_end_transitions:
-            inf_vector = torch.empty(self.start_transitions.shape).fill_(inf).to(self.transitions.dtype).to(self.start_transitions.device)
-            self.start_transitions.data = torch.where(self._constraint_start_mask.byte(), self.start_transitions, inf_vector)
-            self.end_transitions.data = torch.where(self._constraint_end_mask.byte(), self.end_transitions, inf_vector)
-
+            self.start_transitions.data = torch.where(self._constraint_start_mask.byte(), self.start_transitions, self._inf_vector)
+            self.end_transitions.data = torch.where(self._constraint_end_mask.byte(), self.end_transitions, self._inf_vector)
+            
     def __repr__(self) -> str:
         return f'{self.__class__.__name__}(num_tags={self.num_tags})'
 

@@ -1,4 +1,4 @@
-fair-esm==1.0.2
+esm>=3.2.0
 fairscale==0.4.10
 ipdb==0.13.9
 matplotlib==3.5.1
