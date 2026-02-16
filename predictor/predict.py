@@ -106,8 +106,8 @@ def main():
 
             # postprocess on the fly
             for path in ensemble_paths:
-                peptides = utils.convert_path_to_peptide_borders(path, start_state=1, stop_state=50, offset=1)
-                propeptides = utils.convert_path_to_peptide_borders(path, start_state=51, stop_state=100, offset=1)
+                peptides = []
+                propeptides = utils.convert_path_to_peptide_borders(path, start_state=1, stop_state=50, offset=1)
                 preds = utils.simplify_preds([path])[0]
                 all_peptides.append(peptides)
                 all_propeptides.append(propeptides)

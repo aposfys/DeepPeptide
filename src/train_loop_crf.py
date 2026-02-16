@@ -48,9 +48,9 @@ def get_model(args: argparse.Namespace):
     if args.model == 'lstmcnncrf':
         model = LSTMCNNCRF(
             input_size = args.embedding_dim,
-            num_labels=3 if 'with_propeptides' in args.label_type else 2,
+            num_labels=2 if 'with_propeptides' in args.label_type else 2,
             dropout_input=args.dropout,
-            num_states= 101 if 'with_propeptides' in args.label_type else 51,
+            num_states= 51 if 'with_propeptides' in args.label_type else 51,
             n_filters=args.num_filters,
             hidden_size=args.hidden_size,
             filter_size=args.kernel_size, 
@@ -59,9 +59,9 @@ def get_model(args: argparse.Namespace):
     elif args.model == 'lstmcnncrf_simple':
         model = SimpleLSTMCNNCRF(
             input_size = args.embedding_dim,
-            num_labels=3 if args.label_type == 'simple_with_propeptides' else 2,
+            num_labels=2 if args.label_type == 'simple_with_propeptides' else 2,
             dropout_input=args.dropout,
-            num_states= 3 if args.label_type == 'simple_with_propeptides' else 2,
+            num_states= 2 if args.label_type == 'simple_with_propeptides' else 2,
             n_filters=args.num_filters,
             hidden_size=args.hidden_size,
             filter_size=args.kernel_size, 
@@ -73,9 +73,9 @@ def get_model(args: argparse.Namespace):
         model = SelfAttentionCRF(
             input_size = args.embedding_dim,
             hidden_size= args.hidden_size,
-            num_labels=3 if 'with_propeptides' in args.label_type else 2,
+            num_labels=2 if 'with_propeptides' in args.label_type else 2,
             dropout_input=args.dropout,
-            num_states= 121 if 'with_propeptides' in args.label_type else 61,
+            num_states= 51 if 'with_propeptides' in args.label_type else 61,
             n_heads=args.num_filters,
             attn_dropout=args.conv_dropout,
         )

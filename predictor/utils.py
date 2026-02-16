@@ -138,7 +138,7 @@ def load_models(model_list):
     for path in model_list:
         state_dict = torch.load(path, map_location='cpu')
         n_filters, filter_size, hidden_size = infer_sizes(state_dict)
-        model = LSTMCNNCRF(n_filters = n_filters, filter_size = filter_size, hidden_size= hidden_size, num_labels=3, num_states=101)
+        model = LSTMCNNCRF(n_filters = n_filters, filter_size = filter_size, hidden_size= hidden_size, num_labels=2, num_states=51)
         model.eval()
         model.load_state_dict(state_dict)
         models.append(model)
@@ -158,7 +158,7 @@ def combine_crf(models):
         ends.append(m.crf.end_transitions)
 
     with torch.no_grad():
-        crf = CRF(101, batch_first=True, include_start_end_transitions=True)
+        crf = CRF(51, batch_first=True, include_start_end_transitions=True)
         crf.transitions.data = torch.stack(transitions, dim=0).mean(dim=0)
         crf.start_transitions.data = torch.stack(starts, dim=0).mean(dim=0)
         crf.end_transitions.data = torch.stack(ends, dim=0).mean(dim=0)
@@ -230,8 +230,8 @@ def simplify_probs(probs):
     out = []
     for p in probs:
         probs_simple = p[:,:3].copy()
-        probs_simple[:,1] =  p[:,1:51].sum(axis=1)
-        probs_simple[:,2] =  p[:,51:].sum(axis=1)
+        probs_simple[:,1] =  0 # No peptide
+        probs_simple[:,2] =  p[:,1:].sum(axis=1) # Propeptide is now 1-50
         out.append(probs_simple)
 
     return out
@@ -240,10 +240,8 @@ def simplify_preds(preds):
 
     def simplify_fn(x):
         if x>0:
-            if x>50:
-                return 2
-            else:
-                return 1
+            # Map all non-zero states (1-50) to Propeptide (2)
+            return 2
         else:
             return 0 
     
@@ -295,7 +293,7 @@ def plot_predictions(probs: np.ndarray, preds:List[int], save_path: str):
 
     ax = fig.add_subplot(axs[1,0], sharex=ax)
 
-    norm = matplotlib.colors.BoundaryNorm([0,1,2],2)
+    norm = matplotlib.colors.BoundaryNorm([0,1,2,3],3)
     preds = np.array([preds]) # make a 2D array so imshow works
     ax.imshow(preds, cmap=cmap, aspect='auto', norm=norm)
     ax.grid(False)

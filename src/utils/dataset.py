@@ -339,11 +339,11 @@ class PrecomputedCSVForCRFDataset(Dataset):
             propeptide_coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in propeptide_coordinate_strings]
             sequences = data['sequence'].tolist()
 
-            labels = [peptide_list_to_binary_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
-            propeptide_labels = [peptide_list_to_binary_label_sequence(peptides, len(seq), label_value=2) for peptides, seq in zip(propeptide_coordinates, sequences)]
+            # labels = [peptide_list_to_binary_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
+            propeptide_labels = [peptide_list_to_binary_label_sequence(peptides, len(seq), label_value=1) for peptides, seq in zip(propeptide_coordinates, sequences)]
 
-            # labels are 0-1, propeptide_labels are 0-2. There are no overlaps between their positions.
-            self.labels = [x+y for x,y in zip(labels, propeptide_labels)]
+            # labels are 0-1, propeptide_labels are 0-1. There are no overlaps between their positions.
+            self.labels = propeptide_labels
             
             self.peptides_only = coordinates
             self.propeptides = propeptide_coordinates
@@ -378,10 +378,10 @@ class PrecomputedCSVForCRFDataset(Dataset):
             propeptide_coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in propeptide_coordinate_strings]
             sequences = data['sequence'].tolist()
 
-            labels = [peptide_list_to_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
-            propeptide_labels = [peptide_list_to_label_sequence(peptides, len(seq), start_state=61) for peptides, seq in zip(propeptide_coordinates, sequences)]
+            # labels = [peptide_list_to_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
+            propeptide_labels = [peptide_list_to_label_sequence(peptides, len(seq), start_state=1, max_len=50) for peptides, seq in zip(propeptide_coordinates, sequences)]
             #self.labels = [peptide_list_to_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
-            self.labels = [x+y for x,y in zip(labels, propeptide_labels)]
+            self.labels = propeptide_labels
             
             self.peptides_only = coordinates
             self.propeptides = propeptide_coordinates
@@ -507,6 +507,9 @@ class PrecomputedCSVForOverlapCRFDataset(Dataset):
 
         # https://stackoverflow.com/questions/48243507/group-rows-by-overlapping-ranges
         all_peptides = peptide_coordinates + propeptide_coordinates
+        if not all_peptides:
+             return [], []
+
         types = ['Peptide'] * len(peptide_coordinates) + ['Propeptide'] * len(propeptide_coordinates)
         starts, ends = zip(*all_peptides)
 
@@ -536,13 +539,12 @@ class PrecomputedCSVForOverlapCRFDataset(Dataset):
         except FileNotFoundError:
             raise FileNotFoundError(f'Could not find sequence hash {seq_hash} for {self.names[index]} in {self.embeddings_dir}.')
 
-        peptides, propeptides = self.peptides[index]
-        peptides, propeptides = self._sample_from_overlapping_peptides(peptides, propeptides)
+        # Ignore peptides, only use propeptides
+        _, propeptides = self.peptides[index]
+        _, propeptides = self._sample_from_overlapping_peptides([], propeptides)
 
-        label = peptide_list_to_label_sequence(peptides, seq_len, max_len = 50) 
-        propeptide_label = peptide_list_to_label_sequence(propeptides, seq_len, start_state=51, max_len=50) 
-        label = label + propeptide_label # numpy arrays with no overlap at nonzero positions so we can just add the two.
-
+        # Map propeptides to states 1-50 (previously 51-100)
+        label = peptide_list_to_label_sequence(propeptides, seq_len, start_state=1, max_len=50)
 
         label = torch.from_numpy(label)
         mask = torch.ones(embeddings.shape[0])
