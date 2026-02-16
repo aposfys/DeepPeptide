@@ -1,14 +1,11 @@
 # DeepPeptide
-Predicting cleaved peptides in protein sequences.
-
-[![DOI](https://zenodo.org/badge/593202385.svg)](https://zenodo.org/badge/latestdoi/593202385)
-
+Predicting propeptides cleavage site in protein sequences - using ESM3 model, based on the original architecture of DeepPeptide.
 
 ### Training the model
 1. Precompute embeddings using `src/utils/make_embeddings.py`  
 2. Train the model  
 ```
-python3 run.py --embeddings_dir PATH/TO/EMBEDDINGS -df data/labeled_sequences.csv -pf data/graphpart_assignments.csv
+python run.py --embeddings_dir PATH/TO/EMBEDDINGS -df data/labeled_sequences.csv -pf data/graphpart_assignments.csv
 ```
 Note that parameters `--lr`, `--batch_size`, `--dropout`, `--conv_dropout`, `--kernel_size`, `--num_filters`, `--hidden_size` were optimized in a nested CV hyperparameter search and not used at their defaults.
 
