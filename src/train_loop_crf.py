@@ -222,10 +222,6 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
 
     return epoch_loss, probs, preds, true, labels
 
-
-
-
-
 def parse_arguments():
     '''Parse arguments, prepare output directory and dump run configuration.'''
     p = argparse.ArgumentParser()
