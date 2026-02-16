@@ -17,7 +17,7 @@ PROJECT_DIR = os.path.abspath(pjoin(os.path.dirname(__file__), '..'))
 RESULTS_DIR = pjoin(PROJECT_DIR, 'results')
 
 #BIN_DIR = "/novo/users/jref/share/fegt/bin_with_peptideranker/"
-BIN_DIR = pjoin(PROJECT_DIR, 'baselines')
+BIN_DIR = "/novo/users/fegt/in-silico-peptidomics/baselines/"
 PEPTIDE_LOCATOR_BIN_DIR = pjoin(BIN_DIR, "PeptideLocator")
 
 PEPTIDE_LOCATOR_PROTEIN_DIR = pjoin(RESULTS_DIR, 'peptide_locator/{organism}')
@@ -134,7 +134,7 @@ def peptide_locator(protein_id, protein_sequence, organism,
         # Predict SS, SA, SM
         #######################################
         # blast
-        BLASTPGP_BIN = pjoin(BIN_DIR, 'blast-2.2.26/bin/blastpgp')
+        BLASTPGP_BIN = '/novo/users/fegt/random/in-silico-peptidomics/baselines/blast-2.2.26/bin/blastpgp'
         with _tmp_file('tmp') as _tmp, _tmp_file('chk') as _chk, \
                 _tmp_file('blastpgp') as _blastpgp:
             blast_cmd_shared = ["-F", "T", "-b", "3000", "-e", "0.001",
