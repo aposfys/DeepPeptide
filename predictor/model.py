@@ -7,7 +7,10 @@ lstm_cnn.py
 
 import torch
 import torch.nn as nn
-from crf import CRF
+try:
+    from crf import CRF
+except ImportError:
+    from .crf import CRF
 
 
 class LSTMCNN(nn.Module):
@@ -107,13 +110,13 @@ class CRFBaseModel(nn.Module):
         self.features_to_emissions = nn.Linear(64, num_labels)
         self.num_states = num_states
 
-        allowed_transitions, allowed_start, allowed_end = self.get_crf_constraints(self.max_len, self.min_len, n_branches=2 if num_labels==3 else 1)
+        allowed_transitions, allowed_start, allowed_end = self.get_crf_constraints(self.max_len, self.min_len)
         self.allowed_transitions = allowed_transitions
         self.crf = CRF(num_states, batch_first=True, allowed_transitions=allowed_transitions, allowed_start=allowed_start, allowed_end=allowed_end)
 
     @staticmethod
-    def get_crf_constraints(max_len: int = 60, min_len: int = 5, n_branches: int = 1):
-        '''Build the peptide state space model.
+    def get_crf_constraints(max_len: int = 60, min_len: int = 5):
+        '''Build the peptide state space model for Propeptides.
         Each peptide starts as state 1 and goes through 2, 3.
         From 3, it can either go to 4 or skip ahead to any other state up to 59.
         From 59, go to 60. 
@@ -143,33 +146,6 @@ class CRFBaseModel(nn.Module):
         # add a self loop on the pre-last state. Should help avoid issues at inference when longer stuff might show up.
         allowed_state_transitions.append((max_len-1, max_len-1))
 
-        # branch 1 + no state: 0-50
-        # branch 2: 51-101
-        if n_branches == 2:
-            start = 1 + max_len
-            end = 2*max_len
-
-            allowed_starts.append(start)
-            allowed_ends.append(end)
-            allowed_state_transitions.append((0,start))
-            allowed_state_transitions.append((end,start)) 
-            allowed_state_transitions.append((end,0))
-
-            # can go directly from end of peptide to start of propeptide and vice versa.
-            allowed_state_transitions.append((end,1))
-            allowed_state_transitions.append((start-1, start))
-
-            for i in range(start, end): 
-                to_next = (i, i+1)
-                allowed_state_transitions.append(to_next)
-
-                if i >min_len-1: #make skip forward connections
-                    skip_to_i = (start+min_len-3, i)#((min_len-2,i))
-                    allowed_state_transitions.append(skip_to_i) 
-
-        # add a self loop on the pre-last state. Should help avoid issues at inference when longer stuff might show up.
-        allowed_state_transitions.append((end-1, end-1))
-
         return allowed_state_transitions, allowed_starts, allowed_ends
 
     def _debug_crf(self, targets):
@@ -192,11 +168,6 @@ class CRFBaseModel(nn.Module):
             emissions_out = torch.zeros(emissions.shape[0], emissions.shape[1], self.num_states, dtype=emissions.dtype, device=emissions.device)    
             emissions_out[:,:,0] = emissions[:,:,0]
             emissions_out[:,:, 1:(self.max_len+1)] = emissions[:,:,1].unsqueeze(-1)
-        elif emissions.shape[-1] == 3:
-            emissions_out = torch.zeros(emissions.shape[0], emissions.shape[1], self.num_states, dtype=emissions.dtype, device=emissions.device)
-            emissions_out[:,:,0] = emissions[:,:,0]
-            emissions_out[:,:, 1:] = emissions[:,:,1].unsqueeze(-1)
-            emissions_out[:,:, (self.max_len+1):] = emissions[:,:,2].unsqueeze(-1)
         else:
             raise NotImplementedError()
         
@@ -252,5 +223,5 @@ class LSTMCNNCRF(CRFBaseModel):
         self.features_to_emissions = nn.Linear(n_filters*2, num_labels)
         self.num_states = num_states
 
-        allowed_transitions, allowed_start, allowed_end = self.get_crf_constraints(self.max_len, self.min_len, n_branches=2 if num_labels==3 else 1)
+        allowed_transitions, allowed_start, allowed_end = self.get_crf_constraints(self.max_len, self.min_len)
         self.crf = CRF(num_states, batch_first=True, allowed_transitions=allowed_transitions, allowed_start=allowed_start, allowed_end=allowed_end)

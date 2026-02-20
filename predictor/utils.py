@@ -4,13 +4,16 @@ import numpy as np
 from typing import List, Tuple
 import torch
 from tqdm.auto import tqdm
-from model import LSTMCNNCRF, CRF
+try:
+    from model import LSTMCNNCRF, CRF
+except ImportError:
+    from .model import LSTMCNNCRF, CRF
 import os
 import re
 import unicodedata
-import matplotlib
-import matplotlib.pyplot as plt
-import seaborn as sns
+# import matplotlib
+# import matplotlib.pyplot as plt
+# import seaborn as sns
 
 # ESM3 imports
 from esm.models.esm3 import ESM3
@@ -261,47 +264,47 @@ def slugify(value):
     value = re.sub(r'[-\s]+', '-', value)
     return value
 
-def plot_predictions(probs: np.ndarray, preds:List[int], save_path: str):
-
-    cmap = matplotlib.colors.ListedColormap(['#DFDBDB',  '#048BA8', '#E8AE68'], name='from_list', N=None)
-    fig = plt.figure(figsize=(12,4))
-    axs = matplotlib.gridspec.GridSpec(
-                    nrows=2,
-                    ncols=2,
-                    width_ratios=[1,0.01],
-                    wspace=0.1 / 6,
-                    # hspace=0.13 / height,
-                    height_ratios=[3,0.5],
-                )
-
-        
-    ax = fig.add_subplot(axs[0,0])
-    ax.plot(probs[:,0], fillstyle='full', label='None', linestyle='--', linewidth=0.5,  c=cmap.colors[0])
-    ax.plot(probs[:,1], fillstyle='full', label='Peptide', c=cmap.colors[1])
-    ax.plot(probs[:,2], fillstyle='full', label='Propeptide', c=cmap.colors[2])
-
-
-
-    ax.set_ylim(-0.01,1.05)
-    ax.axhline(0.5, linestyle='--', c='red', xmin=0, xmax=1, linewidth=1)
-    ax.set_ylabel('Probability')
-    ax.yaxis.grid(False)
-    ax.xaxis.grid()
-    ax.legend(loc='upper left')
-    ax.tick_params(axis='x', bottom=False, labelbottom=False)
-    sns.despine(ax=ax, bottom=False)
-
-    ax = fig.add_subplot(axs[1,0], sharex=ax)
-
-    norm = matplotlib.colors.BoundaryNorm([0,1,2,3],3)
-    preds = np.array([preds]) # make a 2D array so imshow works
-    ax.imshow(preds, cmap=cmap, aspect='auto', norm=norm)
-    ax.grid(False)
-    ax.tick_params(axis='y', left=False, labelleft=False)
-    sns.despine(ax=ax,left=True)
-    ax.set_ylabel('Prediction', rotation='horizontal', ha='right', va='center')
-    ax.set_xlabel('Sequence position')
-
-
-    plt.savefig(save_path)
-    plt.close()
+# def plot_predictions(probs: np.ndarray, preds:List[int], save_path: str):
+#
+#     cmap = matplotlib.colors.ListedColormap(['#DFDBDB',  '#048BA8', '#E8AE68'], name='from_list', N=None)
+#     fig = plt.figure(figsize=(12,4))
+#     axs = matplotlib.gridspec.GridSpec(
+#                     nrows=2,
+#                     ncols=2,
+#                     width_ratios=[1,0.01],
+#                     wspace=0.1 / 6,
+#                     # hspace=0.13 / height,
+#                     height_ratios=[3,0.5],
+#                 )
+#
+#
+#     ax = fig.add_subplot(axs[0,0])
+#     ax.plot(probs[:,0], fillstyle='full', label='None', linestyle='--', linewidth=0.5,  c=cmap.colors[0])
+#     ax.plot(probs[:,1], fillstyle='full', label='Peptide', c=cmap.colors[1])
+#     ax.plot(probs[:,2], fillstyle='full', label='Propeptide', c=cmap.colors[2])
+#
+#
+#
+#     ax.set_ylim(-0.01,1.05)
+#     ax.axhline(0.5, linestyle='--', c='red', xmin=0, xmax=1, linewidth=1)
+#     ax.set_ylabel('Probability')
+#     ax.yaxis.grid(False)
+#     ax.xaxis.grid()
+#     ax.legend(loc='upper left')
+#     ax.tick_params(axis='x', bottom=False, labelbottom=False)
+#     sns.despine(ax=ax, bottom=False)
+#
+#     ax = fig.add_subplot(axs[1,0], sharex=ax)
+#
+#     norm = matplotlib.colors.BoundaryNorm([0,1,2,3],3)
+#     preds = np.array([preds]) # make a 2D array so imshow works
+#     ax.imshow(preds, cmap=cmap, aspect='auto', norm=norm)
+#     ax.grid(False)
+#     ax.tick_params(axis='y', left=False, labelleft=False)
+#     sns.despine(ax=ax,left=True)
+#     ax.set_ylabel('Prediction', rotation='horizontal', ha='right', va='center')
+#     ax.set_xlabel('Sequence position')
+#
+#
+#     plt.savefig(save_path)
+#     plt.close()

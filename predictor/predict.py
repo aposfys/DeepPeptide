@@ -21,7 +21,7 @@ def main():
     parser.add_argument('--fastafile', '-ff' ,'-fasta', type=str, help='Amino acid sequences to predict in FASTA format.', required=True)
     parser.add_argument('--output_dir', '-od', type=str, help='Path at which to save the output files. Will be created if not existing already.', required=True)
     parser.add_argument('--batch_size', '-bs', type=int, help='Batch size (number of sequences).', default=10)
-    parser.add_argument('--output_fmt', '-of', default='img', const='img', nargs='?', choices=['img', 'json'], help='The output format. img also includes the json file.')
+    parser.add_argument('--output_fmt', '-of', default='json', const='json', nargs='?', choices=['img', 'json'], help='The output format. json produces no images and is faster.')
     parser.add_argument('--esm_model_path', default=None,  help ='Optional path to a local ESM3 model directory or checkpoint. If not specified, uses the default "esm3_sm_open_v1".')
 
     args = parser.parse_args()
@@ -30,7 +30,10 @@ def main():
     out_dict['INFO'] = {}
     out_dict['PREDICTIONS'] = {}
 
-    compute_marginals = args.output_fmt == 'img'
+    # Default to no images for speed/lightweight
+    compute_marginals = False
+    if args.output_fmt == 'img':
+        compute_marginals = True
     
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -143,35 +146,35 @@ def main():
 
 
     # 4. write output
-    if args.output_fmt == 'img':
-
-        marginal_dict = {}
-        marginal_dict['INFO'] = out_dict['INFO'].copy()
-        marginal_dict['INFO']['dimensions'] = {0: 'None', 1: 'Peptide', 2: 'Propeptide'}
-        marginal_dict['PREDICTIONS'] = {}
-
-        jobs = []
-        with ProcessPoolExecutor() as executor:
-
-            for i in range(len(all_preds)):
-                pred, prob, name = all_preds[i], all_probs[i], ids[i]
-
-                marginal_dict['PREDICTIONS'][name] = {}
-                marginal_dict['PREDICTIONS'][name]['probabilities'] = prob.tolist()
-                marginal_dict['PREDICTIONS'][name]['predictions'] = pred
-
-                save_path = os.path.join(args.output_dir, f"{utils.slugify(name[1:])}.png") # skip > and replace non-alpha
-                out_dict['PREDICTIONS'][name]['figure'] = save_path
-                f = executor.submit(utils.plot_predictions, prob, pred, save_path)
-                jobs.append(f)
-
-        for job in jobs:
-            job.result()
+    # if args.output_fmt == 'img':
+    #
+    #     marginal_dict = {}
+    #     marginal_dict['INFO'] = out_dict['INFO'].copy()
+    #     marginal_dict['INFO']['dimensions'] = {0: 'None', 1: 'Peptide', 2: 'Propeptide'}
+    #     marginal_dict['PREDICTIONS'] = {}
+    #
+    #     jobs = []
+    #     with ProcessPoolExecutor() as executor:
+    #
+    #         for i in range(len(all_preds)):
+    #             pred, prob, name = all_preds[i], all_probs[i], ids[i]
+    #
+    #             marginal_dict['PREDICTIONS'][name] = {}
+    #             marginal_dict['PREDICTIONS'][name]['probabilities'] = prob.tolist()
+    #             marginal_dict['PREDICTIONS'][name]['predictions'] = pred
+    #
+    #             save_path = os.path.join(args.output_dir, f"{utils.slugify(name[1:])}.png") # skip > and replace non-alpha
+    #             out_dict['PREDICTIONS'][name]['figure'] = save_path
+    #             f = executor.submit(utils.plot_predictions, prob, pred, save_path)
+    #             jobs.append(f)
+    #
+    #     for job in jobs:
+    #         job.result()
 
     print(f'Writing JSON in {args.output_dir}')
-    json.dump(out_dict, open(os.path.join(args.output_dir, 'peptide_predictions.json'), 'w'), indent=1)
-    if args.output_fmt == 'img':
-        json.dump(marginal_dict, open(os.path.join(args.output_dir, 'sequence_outputs.json'), 'w'), indent=1)
+    json.dump(out_dict, open(os.path.join(args.output_dir, 'propeptide_predictions.json'), 'w'), indent=1)
+    # if args.output_fmt == 'img':
+    #     json.dump(marginal_dict, open(os.path.join(args.output_dir, 'sequence_outputs.json'), 'w'), indent=1)
 
     write_fancy_output(out_dict)
 

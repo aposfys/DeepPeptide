@@ -81,20 +81,21 @@ class PrecomputedCSVDataset(Dataset):
 
         self.label_type = label_type
 
-        if label_type == 'binary':
-            self.labels = data['is_peptide'].tolist()
-        elif label_type == 'start_stop':
-            self.labels = data['start_stop'].tolist()
-        elif label_type == 'cleavage_sites':
-            # simplify the start-stop labels. treat all sites as simple cleavage sites.
-            labels = data['start_stop'].str.replace('2','1').str.replace('3','1').tolist() # 1 start, 2 end, 3 both
-            self.labels = ['0'+x[1:-1] +'0' for x in labels] # start and end positions fo protein are never CS, also when there is a peptide.
-        elif label_type == 'intensity':
-            labels =  data['intensity'].str.split(';')
-            self.labels = labels.apply(lambda x: [float(y) for y in x]).tolist()
+        # if label_type == 'binary':
+        #     self.labels = data['is_peptide'].tolist()
+        # elif label_type == 'start_stop':
+        #     self.labels = data['start_stop'].tolist()
+        # elif label_type == 'cleavage_sites':
+        #     # simplify the start-stop labels. treat all sites as simple cleavage sites.
+        #     labels = data['start_stop'].str.replace('2','1').str.replace('3','1').tolist() # 1 start, 2 end, 3 both
+        #     self.labels = ['0'+x[1:-1] +'0' for x in labels] # start and end positions fo protein are never CS, also when there is a peptide.
+        # elif label_type == 'intensity':
+        #     labels =  data['intensity'].str.split(';')
+        #     self.labels = labels.apply(lambda x: [float(y) for y in x]).tolist()
         
         else:
             raise NotImplementedError(label_type)
+        # pass
 
         self.sequences = data['sequence'].tolist()
         self.organism = data['organism'].tolist()
@@ -122,15 +123,16 @@ class PrecomputedCSVDataset(Dataset):
             raise FileNotFoundError(f'Could not find sequence hash {seq_hash} for {self.names[index]} in {self.embeddings_dir}.')
         label = self.labels[index]
 
-        if self.label_type == 'intensity':
-            label = np.array(label)
-            np.log(label, where=label>0, out=label) # applies in-place to all >0.
-            label = torch.FloatTensor(label)
-            # if label.isnan().sum()>0:
-            #     import ipdb; ipdb.set_trace()
+        # if self.label_type == 'intensity':
+        #     label = np.array(label)
+        #     np.log(label, where=label>0, out=label) # applies in-place to all >0.
+        #     label = torch.FloatTensor(label)
+        #     # if label.isnan().sum()>0:
+        #     #     import ipdb; ipdb.set_trace()
 
         else:
             label = torch.IntTensor([int(x) for x in label])
+        # pass
 
         # mask : batch_size, seq_len
         mask = torch.ones(embeddings.shape[0])
@@ -325,46 +327,46 @@ class PrecomputedCSVForCRFDataset(Dataset):
 
         # NOTE self.peptides is 1-based indexing straight from UniProt.
 
-        if label_type == 'simple': # The easiest case 0 for no peptide, 1 for peptide.
-            coordinate_strings = data['coordinates'].tolist()
-            coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in coordinate_strings]
-            sequences = data['sequence'].tolist()
-            self.labels = [peptide_list_to_binary_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
-            self.peptides = coordinates
+        # if label_type == 'simple': # The easiest case 0 for no peptide, 1 for peptide.
+        #     coordinate_strings = data['coordinates'].tolist()
+        #     coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in coordinate_strings]
+        #     sequences = data['sequence'].tolist()
+        #     self.labels = [peptide_list_to_binary_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
+        #     self.peptides = coordinates
 
-        elif label_type == 'simple_with_propeptides':
-            coordinate_strings = data['coordinates'].tolist()
-            propeptide_coordinate_strings = data['propeptide_coordinates'].tolist()
-            coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in coordinate_strings]
-            propeptide_coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in propeptide_coordinate_strings]
-            sequences = data['sequence'].tolist()
+        # elif label_type == 'simple_with_propeptides':
+        #     coordinate_strings = data['coordinates'].tolist()
+        #     propeptide_coordinate_strings = data['propeptide_coordinates'].tolist()
+        #     coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in coordinate_strings]
+        #     propeptide_coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in propeptide_coordinate_strings]
+        #     sequences = data['sequence'].tolist()
 
-            # labels = [peptide_list_to_binary_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
-            propeptide_labels = [peptide_list_to_binary_label_sequence(peptides, len(seq), label_value=1) for peptides, seq in zip(propeptide_coordinates, sequences)]
+        #     # labels = [peptide_list_to_binary_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
+        #     propeptide_labels = [peptide_list_to_binary_label_sequence(peptides, len(seq), label_value=1) for peptides, seq in zip(propeptide_coordinates, sequences)]
 
-            # labels are 0-1, propeptide_labels are 0-1. There are no overlaps between their positions.
-            self.labels = propeptide_labels
+        #     # labels are 0-1, propeptide_labels are 0-1. There are no overlaps between their positions.
+        #     self.labels = propeptide_labels
             
-            self.peptides_only = coordinates
-            self.propeptides = propeptide_coordinates
-            self.peptides = [(x,y) for x,y, in zip(coordinates, propeptide_coordinates)] # data loading works exactly the same. only metrics computation needs to unpack this.
+        #     self.peptides_only = coordinates
+        #     self.propeptides = propeptide_coordinates
+        #     self.peptides = [(x,y) for x,y, in zip(coordinates, propeptide_coordinates)] # data loading works exactly the same. only metrics computation needs to unpack this.
 
 
-        elif label_type == 'multistate': # The advanced peptide state grammar.
+        # elif label_type == 'multistate': # The advanced peptide state grammar.
 
-            # TODO decide how to handle overlap merges that cause peptides longer than max.
-            # As it only affects a few we just drop them for now to avoid errors.
-            data = data.loc[~data.index.isin(['P87352', 'Q91082', 'P10645'])]
-            self.data = data
-            self.names = data.index.tolist()
+        #     # TODO decide how to handle overlap merges that cause peptides longer than max.
+        #     # As it only affects a few we just drop them for now to avoid errors.
+        #     data = data.loc[~data.index.isin(['P87352', 'Q91082', 'P10645'])]
+        #     self.data = data
+        #     self.names = data.index.tolist()
 
-            coordinate_strings = data['coordinates'].tolist()
-            coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in coordinate_strings]
-            sequences = data['sequence'].tolist()
-            self.labels = [peptide_list_to_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
-            self.peptides = coordinates
+        #     coordinate_strings = data['coordinates'].tolist()
+        #     coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in coordinate_strings]
+        #     sequences = data['sequence'].tolist()
+        #     self.labels = [peptide_list_to_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
+        #     self.peptides = coordinates
 
-        elif label_type == 'multistate_with_propeptides': # The advanced peptide state grammar.
+        if label_type == 'multistate_with_propeptides': # The advanced peptide state grammar.
 
             # TODO decide how to handle overlap merges that cause peptides longer than max.
             # As it only affects a few we just drop them for now to avoid errors.
@@ -389,14 +391,14 @@ class PrecomputedCSVForCRFDataset(Dataset):
 
 
 
-        elif label_type == 'multilabel':
-            coordinate_strings = data['coordinates'].tolist()
-            coordinates = [parse_coordinate_string(x, merge_overlaps=False) for x in coordinate_strings]
-            sequences = data['sequence'].tolist()
+        # elif label_type == 'multilabel':
+        #     coordinate_strings = data['coordinates'].tolist()
+        #     coordinates = [parse_coordinate_string(x, merge_overlaps=False) for x in coordinate_strings]
+        #     sequences = data['sequence'].tolist()
             
-            self.labels = None
-            self.peptides = coordinates
-            raise NotImplementedError('multilabel')
+        #     self.labels = None
+        #     self.peptides = coordinates
+        #     raise NotImplementedError('multilabel')
         else:
             raise NotImplementedError(label_type)
 
