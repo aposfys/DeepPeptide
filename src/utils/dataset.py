@@ -93,9 +93,9 @@ class PrecomputedCSVDataset(Dataset):
         #     labels =  data['intensity'].str.split(';')
         #     self.labels = labels.apply(lambda x: [float(y) for y in x]).tolist()
         
-        else:
-            raise NotImplementedError(label_type)
-        # pass
+        # else:
+        #     raise NotImplementedError(label_type)
+        pass
 
         self.sequences = data['sequence'].tolist()
         self.organism = data['organism'].tolist()
@@ -130,9 +130,9 @@ class PrecomputedCSVDataset(Dataset):
         #     # if label.isnan().sum()>0:
         #     #     import ipdb; ipdb.set_trace()
 
-        else:
-            label = torch.IntTensor([int(x) for x in label])
-        # pass
+        # else:
+        #     label = torch.IntTensor([int(x) for x in label])
+        pass
 
         # mask : batch_size, seq_len
         mask = torch.ones(embeddings.shape[0])

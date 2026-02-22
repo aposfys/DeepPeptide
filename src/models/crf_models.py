@@ -29,7 +29,7 @@ class CRFBaseModel(nn.Module):
         self.crf = CRF(num_states, batch_first=True, allowed_transitions=allowed_transitions, allowed_start=allowed_start, allowed_end=allowed_end)
 
     @staticmethod
-    def get_crf_constraints(max_len: int = 60, min_len: int = 5):
+    def get_crf_constraints(max_len: int = 50, min_len: int = 5):
         '''Build the peptide state space model for Propeptides.
         Each peptide starts as state 1 and goes through 2, 3.
         From 3, it can either go to 4 or skip ahead to any other state up to 59.
