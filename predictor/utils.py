@@ -15,9 +15,7 @@ import unicodedata
 # import matplotlib.pyplot as plt
 # import seaborn as sns
 
-# ESM3 imports
-from esm.models.esm3 import ESM3
-from esm.sdk.api import ESMProtein
+import esm
 
 def parse_fasta(fastafile: str):
     '''
@@ -57,26 +55,20 @@ def parse_fasta(fastafile: str):
 # same as esm_embed(), but keep models loaded.
 class ESMEmbedder():
 
-    def __init__(self, esm: str = 'esm3', local_esm_path: str = None):
+    def __init__(self, esm_version: str = 'esm2', local_esm_path: str = None):
 
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-        # We default to ESM3 open small model
-        # local_esm_path could be handled by from_pretrained if it points to a directory or handled by load_local_model internally
-        # We assume local_esm_path is compatible if provided, or ignore esm arg if it was 'esm2'/'esm1b'
-        
-        # If local_esm_path is provided, try to use it, otherwise default.
-        model_name = "esm3_sm_open_v1"
-        if local_esm_path:
-             # This might need adjustment if local path structure is different, 
-             # but assuming standard HF structure or esm compatible path
-             # But from_pretrained usually takes a model name or repo id.
-             # If local_esm_path is a file (like .pt), ESM3 might not support loading single .pt file easily via from_pretrained.
-             # But let's assume standard usage.
-             # The user asked to use huggingface model.
-             pass
-
-        self.esm_model = ESM3.from_pretrained(model_name)
+        if local_esm_path is not None:
+            self.esm_model, self.alphabet = esm.pretrained.load_model_and_alphabet_local(local_esm_path)
+        else:
+            if esm_version == 'esm1b':
+                self.esm_model, self.alphabet = esm.pretrained.esm1b_t33_650M_UR50S()
+            elif esm_version == 'esm2':
+                self.esm_model, self.alphabet = esm.pretrained.esm2_t33_650M_UR50D()
+            else:
+                raise NotImplementedError(esm_version)
+        self.batch_converter = self.alphabet.get_batch_converter()
         self.esm_model.eval()
         self.esm_model.to(self.device)
 
@@ -86,44 +78,24 @@ class ESMEmbedder():
         embeddings = []
         iterator = tqdm(sequences, desc='Embedding...', keep=False) if progress_bar else sequences
         for sequence in iterator:
+            data = [
+                ("protein1", sequence),
+            ]
+            batch_labels, batch_strs, batch_tokens = self.batch_converter(data)
+            batch_tokens = batch_tokens.to(self.device)
 
             with torch.no_grad():
+                results = self.esm_model(batch_tokens, repr_layers=[33], return_contacts=True)
+            token_representations = results["representations"][33]
 
-                protein = ESMProtein(sequence=sequence)
-                protein_tensor = self.esm_model.encode(protein)
-                sequence_tokens = protein_tensor.sequence
-
-                if sequence_tokens.dim() == 1:
-                    sequence_tokens = sequence_tokens.unsqueeze(0)
-
-                minibatch_max_length = sequence_tokens.size(1)
-
-                tokens_list = []
-                end = 0
-                while end <= minibatch_max_length:
-                    start = end
-                    end = start + 1022
-                    if end <= minibatch_max_length:
-                        end = end - 300
-                    chunk = sequence_tokens[:, start:end]
-                    output = self.esm_model(sequence_tokens=chunk)
-                    tokens_list.append(output.embeddings)
-
-                out = torch.cat(tokens_list, dim=1).cpu()
-
-                # set nan to zeros
-                out[out!=out] = 0.0
-
-                res = out.squeeze(0)
-                seq_embedding = res[1:-1] # Strip BOS/EOS
-
-                embeddings.append(seq_embedding)
+            seq_embedding = token_representations[0, 1:len(sequence) + 1].cpu()
+            embeddings.append(seq_embedding)
 
         return embeddings
-def esm_embed(sequences:List[str], repr_layers: int=33, progress_bar: bool = False, esm: str = 'esm3', local_esm_path: str = None) -> List[torch.Tensor]:
-    '''Generate the esm3 embeddings for a sequence.'''
+def esm_embed(sequences:List[str], repr_layers: int=33, progress_bar: bool = False, esm_version: str = 'esm2', local_esm_path: str = None) -> List[torch.Tensor]:
+    '''Generate the esm embeddings for a sequence.'''
     
-    embedder = ESMEmbedder(esm, local_esm_path)
+    embedder = ESMEmbedder(esm_version, local_esm_path)
     return embedder(sequences, repr_layers, progress_bar)
 
 def infer_sizes(state_dict):

@@ -6,7 +6,7 @@ Predicting prodomain cleavage sites (propeptides) in protein sequences.
 
 ### Training the model
 1. Precompute embeddings using `src/utils/make_embeddings.py`  
-2. Train the model  
+2. Train the model (automatically uses the new propeptide-only label configuration)
 ```
 python3 run.py --embeddings_dir PATH/TO/EMBEDDINGS -df data/labeled_sequences.csv -pf data/graphpart_assignments.csv
 ```

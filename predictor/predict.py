@@ -11,10 +11,50 @@ import json
 from tqdm.auto import tqdm
 import glob
 
-# Search for models in checkpoints_esm3 directory
-# The user needs to train new models and place them there.
-MODEL_DIR = 'checkpoints_esm3'
-MODEL_LIST = glob.glob(os.path.join(MODEL_DIR, '**', '*.pt'), recursive=True)
+MODEL_LIST_ESM1B = [
+    'checkpoints_esm1b/0/1/model.pt',
+    'checkpoints_esm1b/0/2/model.pt',
+    'checkpoints_esm1b/0/3/model.pt',
+    'checkpoints_esm1b/0/4/model.pt',
+    'checkpoints_esm1b/1/0/model.pt',
+    'checkpoints_esm1b/1/2/model.pt',
+    'checkpoints_esm1b/1/3/model.pt',
+    'checkpoints_esm1b/1/4/model.pt',
+    'checkpoints_esm1b/2/0/model.pt',
+    'checkpoints_esm1b/2/1/model.pt',
+    'checkpoints_esm1b/2/3/model.pt',
+    'checkpoints_esm1b/2/4/model.pt',
+    'checkpoints_esm1b/3/0/model.pt',
+    'checkpoints_esm1b/3/1/model.pt',
+    'checkpoints_esm1b/3/2/model.pt',
+    'checkpoints_esm1b/3/4/model.pt',
+    'checkpoints_esm1b/4/0/model.pt',
+    'checkpoints_esm1b/4/1/model.pt',
+    'checkpoints_esm1b/4/2/model.pt',
+    'checkpoints_esm1b/4/3/model.pt',
+]
+MODEL_LIST_ESM2 = [
+    'checkpoints_esm2/0/1/model.pt',
+    'checkpoints_esm2/0/2/model.pt',
+    'checkpoints_esm2/0/3/model.pt',
+    'checkpoints_esm2/0/4/model.pt',
+    'checkpoints_esm2/1/0/model.pt',
+    'checkpoints_esm2/1/2/model.pt',
+    'checkpoints_esm2/1/3/model.pt',
+    'checkpoints_esm2/1/4/model.pt',
+    'checkpoints_esm2/2/0/model.pt',
+    'checkpoints_esm2/2/1/model.pt',
+    'checkpoints_esm2/2/3/model.pt',
+    'checkpoints_esm2/2/4/model.pt',
+    'checkpoints_esm2/3/0/model.pt',
+    'checkpoints_esm2/3/1/model.pt',
+    'checkpoints_esm2/3/2/model.pt',
+    'checkpoints_esm2/3/4/model.pt',
+    'checkpoints_esm2/4/0/model.pt',
+    'checkpoints_esm2/4/1/model.pt',
+    'checkpoints_esm2/4/2/model.pt',
+    'checkpoints_esm2/4/3/model.pt',
+]
 
 def main():
     parser = argparse.ArgumentParser('PeptideCRF peptide prediction tool', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -22,7 +62,8 @@ def main():
     parser.add_argument('--output_dir', '-od', type=str, help='Path at which to save the output files. Will be created if not existing already.', required=True)
     parser.add_argument('--batch_size', '-bs', type=int, help='Batch size (number of sequences).', default=10)
     parser.add_argument('--output_fmt', '-of', default='json', const='json', nargs='?', choices=['img', 'json'], help='The output format. json produces no images and is faster.')
-    parser.add_argument('--esm_model_path', default=None,  help ='Optional path to a local ESM3 model directory or checkpoint. If not specified, uses the default "esm3_sm_open_v1".')
+    parser.add_argument('--esm', default='esm2', const='esm2', nargs='?', choices=['esm2', 'esm1b'], help ='Which ESM version to use.')
+    parser.add_argument('--esm_pt', default=None,  help ='Optional path to a ESM .pt checkpoint. If not specified, uses the default loading and caching of the esm package.')
 
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
@@ -43,19 +84,13 @@ def main():
     out_dict['INFO']['size'] = len(ids)
 
     # 2. prepare embedder and models
-    # Initialize ESM3 embedder
-    embedder = utils.ESMEmbedder(local_esm_path=args.esm_model_path)
+    embedder = utils.ESMEmbedder(args.esm, args.esm_pt)
     batches = utils.batchify_sequences(seqs, args.batch_size)
-    if not MODEL_LIST:
-        print(f"WARNING: No model checkpoints found in {MODEL_DIR}. Prediction will likely fail or use random weights if not handled.")
-        # We allow proceeding if models list is empty? load_models returns empty list.
-        # combine_crf might fail.
-        # But we can't do much without trained models.
         
-    models = utils.load_models(MODEL_LIST)
+    models = utils.load_models(MODEL_LIST_ESM1B if args.esm == 'esm1b' else MODEL_LIST_ESM2)
     
     if not models:
-        print("Error: No models loaded. Please train models with ESM3 embeddings and place checkpoints in 'checkpoints_esm3/'.")
+        print("Error: No models loaded.")
         return    
     crf = utils.combine_crf(models)
     crf.to(device)

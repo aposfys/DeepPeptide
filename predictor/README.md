@@ -8,15 +8,16 @@ This is the DeepPeptide predictor, updated to use ESM3 (sm-open-v1).
 1. Install the requirements in `requirements.txt` using `pip install -r requirements.txt`.
 2. Ensure you are in the `predictor` directory. (This is important so the model paths are correct.)
 3. Run the predictor using `python3 predict.py -ff fasta_file.fasta -od testrun_outputs/`.
-**Note:** You must have valid ESM3-compatible model checkpoints in `predictor checkpoints_esm3/` (or specify via code) to run predictions. The previous ESM1b/ESM2 checkpoints are not compatible.
+**Note:** You must have valid model checkpoints compatible with the propeptide-only architecture (51 states) in `checkpoints_esm1b/` or `checkpoints_esm2/`.
 
 | Argument | Short | Default | Description |
 |---------|-------|-------|-------|
 | `--fasta_file` | `-ff` | `None` (required) | Path to the fasta file containing the protein sequences to predict. |
 | `--output_dir` | `-od` | `None` (required) | Path to the directory where the output files will be saved. |
 | `--batch_size` | `-bs` | `10` | Batch size for prediction. Use this to tune memory usage according to your hardware. In general, larger batches are better, but a batch needs to fit the memory constraints of the given hardware. |
-| `--output_fmt` | `-of` | `img` | Output format. Can be `img`, which produces a plot for each sequence, or `json` which skips plot generation. |
-| `--esm_model_path` | | `None`| A path to a local ESM3 model directory or checkpoint. If not specified, uses the default "esm3_sm_open_v1" (which downloads and caches the model from Hugging Face). |
+| `--output_fmt` | `-of` | `json` | Output format. `json` (default) is faster. `img` produces plots (if enabled). |
+| `--esm` | | `esm2` | Which ESM version to use (`esm2` or `esm1b`). |
+| `--esm_pt` | | `None` | Optional path to a local ESM checkpoint (.pt). |
 
 ### Input format
 
