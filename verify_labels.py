@@ -26,20 +26,29 @@ def verify_labels():
     # We need a protein that definitely has a propeptide to verify labeling works.
     df = pd.read_csv(data_file)
 
-    # Filter for non-empty propeptide coordinates
+    # We also need the cluster IDs for the partition filter
+    part_df = pd.read_csv(partitioning_file)
+
+    # Filter for non-empty propeptide coordinates AND presence in partitioning file
     df_pro = df[df['propeptide_coordinates'].notna() & (df['propeptide_coordinates'] != '')]
+    # Ensure protein_id is in partitioning file
+    df_pro = df_pro[df_pro['protein_id'].isin(part_df['AC'])]
+
     if len(df_pro) == 0:
-        print("Error: No proteins with propeptides found in CSV to test!")
+        print("Error: No proteins with propeptides found in CSV (that match partitioning file) to test!")
         return
 
-    print(f"Found {len(df_pro)} proteins with propeptides. Testing the first few...")
+    # Select 5 random proteins
+    n_samples = 5
+    if len(df_pro) < n_samples:
+        n_samples = len(df_pro)
+
+    print(f"Found {len(df_pro)} valid proteins with propeptides. Testing {n_samples} random samples...")
 
     # 3. Create Dummy Embeddings & Test
     # We need to mock the embeddings because the dataset loader expects them to exist.
-    test_indices = df_pro.index[:3] # Test first 3
-
-    # We also need the cluster IDs for the partition filter
-    part_df = pd.read_csv(partitioning_file)
+    test_df = df_pro.sample(n_samples)
+    test_indices = test_df.index
     valid_clusters = []
 
     for idx in test_indices:
