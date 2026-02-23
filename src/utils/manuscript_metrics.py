@@ -172,6 +172,10 @@ def compute_peptide_finding_metrics(true_start_stop: List[List[Tuple[int,int]]],
     return precision, recall, f1
     
 
+def add_dict_to_writer(metrics, writer, step, prefix=''):
+    for k, v in metrics.items():
+        writer.add_scalar(f'{prefix}/{k}', v, step)
+
 def compute_all_metrics(probs: np.ndarray, preds: np.ndarray, labels: np.ndarray, names: np.ndarray, true_df, windows: List[int] = [0,1,2,3]):
     # data = pickle.load(open(predictions_file, 'rb'))
     # probs, preds, labels, names = data
