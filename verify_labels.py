@@ -69,19 +69,32 @@ def verify_labels():
     print(f"Dataset initialized with {len(dataset)} samples.")
 
     # 5. Check Labels
+    # We filter the dataset to only include the names we prepared embeddings for.
+    # The dataset object loads everything in the partition, but we only want to iterate over our test set.
+
     pass_count = 0
-    for i in range(len(dataset)):
+    test_names = df.loc[test_indices, 'protein_id'].tolist()
+
+    # Map dataset names to indices
+    name_to_idx = {name: i for i, name in enumerate(dataset.names)}
+
+    print(f"\nVerifying {len(test_names)} samples...")
+
+    for pid in test_names:
+        if pid not in name_to_idx:
+            print(f"Skipping {pid} (not in dataset partition filter)")
+            continue
+
+        i = name_to_idx[pid]
         try:
             emb, mask, label, peptides = dataset[i]
 
-            # Get protein ID for context
-            pid = dataset.names[i]
             print(f"\nChecking Protein: {pid}")
 
             # Check Values
             unique_vals = torch.unique(label).tolist()
             unique_vals.sort()
-            print(f"  Label Values Present: {unique_vals}")
+            # print(f"  Label Values Present: {unique_vals}")
 
             # Validation Checks
             errors = []
@@ -95,16 +108,22 @@ def verify_labels():
             else:
                 # Check if we actually have propeptide labels (values > 0)
                 if (label > 0).any():
-                    print("  SUCCESS: Propeptide labels (1-50) are present.")
+                    # Find start/end of the non-zero region
+                    nonzero_indices = torch.nonzero(label > 0).squeeze()
+                    if nonzero_indices.numel() > 0:
+                        start, end = nonzero_indices[0].item(), nonzero_indices[-1].item()
+                        print(f"  SUCCESS: Propeptide labels (1-50) present at indices {start}-{end}.")
+                    else:
+                        print("  SUCCESS: Propeptide labels present.")
                     pass_count += 1
                 else:
                     print("  WARNING: Only background labels (0) found. (Did we pick a protein without propeptide?)")
 
         except Exception as e:
-            print(f"  ERROR processing sample {i}: {e}")
+            print(f"  ERROR processing sample {pid}: {e}")
 
     print("\n--- Summary ---")
-    print(f"Verified {pass_count}/{len(dataset)} samples have correct propeptide labels.")
+    print(f"Verified {pass_count}/{len(test_names)} tested samples have correct propeptide labels.")
 
     # Cleanup
     if os.path.exists(embeddings_dir):
