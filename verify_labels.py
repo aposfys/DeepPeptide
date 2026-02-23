@@ -1,0 +1,114 @@
+
+import torch
+import pandas as pd
+import numpy as np
+import os
+import sys
+from hashlib import md5
+import shutil
+
+# Add root directory to python path so we can import src
+sys.path.append(os.getcwd())
+from src.utils.dataset import PrecomputedCSVForOverlapCRFDataset
+
+def verify_labels():
+    print("--- Verifying Dataset Labels ---")
+    data_file = 'data/labeled_sequences.csv'
+    partitioning_file = 'data/graphpart_assignments.csv'
+    embeddings_dir = 'data/embeddings_test_verif'
+
+    # 1. Setup Dummy Environment
+    if os.path.exists(embeddings_dir):
+        shutil.rmtree(embeddings_dir)
+    os.makedirs(embeddings_dir, exist_ok=True)
+
+    # 2. Find Test Candidates
+    # We need a protein that definitely has a propeptide to verify labeling works.
+    df = pd.read_csv(data_file)
+
+    # Filter for non-empty propeptide coordinates
+    df_pro = df[df['propeptide_coordinates'].notna() & (df['propeptide_coordinates'] != '')]
+    if len(df_pro) == 0:
+        print("Error: No proteins with propeptides found in CSV to test!")
+        return
+
+    print(f"Found {len(df_pro)} proteins with propeptides. Testing the first few...")
+
+    # 3. Create Dummy Embeddings & Test
+    # We need to mock the embeddings because the dataset loader expects them to exist.
+    test_indices = df_pro.index[:3] # Test first 3
+
+    # We also need the cluster IDs for the partition filter
+    part_df = pd.read_csv(partitioning_file)
+    valid_clusters = []
+
+    for idx in test_indices:
+        seq = df.loc[idx, 'sequence']
+        pid = df.loc[idx, 'protein_id']
+
+        # Get cluster
+        cluster = part_df.loc[part_df['AC'] == pid, 'cluster'].values[0]
+        valid_clusters.append(cluster)
+
+        # Create dummy embedding
+        seq_hash = md5(seq.encode()).digest().hex()
+        # ESM2 embedding dimension is typically 1280 (for t33), dataset converts to float32
+        emb = torch.randn(len(seq), 1280)
+        torch.save(emb, os.path.join(embeddings_dir, f'{seq_hash}.pt'))
+
+    # 4. Instantiate Dataset
+    # We pass the list of valid clusters so our test proteins are included
+    dataset = PrecomputedCSVForOverlapCRFDataset(
+        embeddings_dir=embeddings_dir,
+        data_file=data_file,
+        partitioning_file=partitioning_file,
+        partitions=list(set(valid_clusters)),
+        label_type='multistate_with_propeptides'
+    )
+
+    print(f"Dataset initialized with {len(dataset)} samples.")
+
+    # 5. Check Labels
+    pass_count = 0
+    for i in range(len(dataset)):
+        try:
+            emb, mask, label, peptides = dataset[i]
+
+            # Get protein ID for context
+            pid = dataset.names[i]
+            print(f"\nChecking Protein: {pid}")
+
+            # Check Values
+            unique_vals = torch.unique(label).tolist()
+            unique_vals.sort()
+            print(f"  Label Values Present: {unique_vals}")
+
+            # Validation Checks
+            errors = []
+            if (label < 0).any():
+                errors.append("Negative values found.")
+            if (label > 50).any():
+                errors.append("Values > 50 found (Old labeling scheme?).")
+
+            if errors:
+                print(f"  FAILED: {', '.join(errors)}")
+            else:
+                # Check if we actually have propeptide labels (values > 0)
+                if (label > 0).any():
+                    print("  SUCCESS: Propeptide labels (1-50) are present.")
+                    pass_count += 1
+                else:
+                    print("  WARNING: Only background labels (0) found. (Did we pick a protein without propeptide?)")
+
+        except Exception as e:
+            print(f"  ERROR processing sample {i}: {e}")
+
+    print("\n--- Summary ---")
+    print(f"Verified {pass_count}/{len(dataset)} samples have correct propeptide labels.")
+
+    # Cleanup
+    if os.path.exists(embeddings_dir):
+        shutil.rmtree(embeddings_dir)
+
+if __name__ == "__main__":
+    verify_labels()
