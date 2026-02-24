@@ -12,8 +12,8 @@ import pickle
 from typing import List, Tuple
 from tqdm.auto import tqdm
 
-PEPTIDE_START_STATE, PEPTIDE_END_STATE = 1, 50
-PROPEPTIDE_START_STATE, PROPEPTIDE_END_STATE = 51, 100
+PEPTIDE_START_STATE, PEPTIDE_END_STATE = -1, -1
+PROPEPTIDE_START_STATE, PROPEPTIDE_END_STATE = 1, 50
 
 def convert_path_to_peptide_borders(pred: List[int], start_state, stop_state, offset: int=0) -> List[Tuple[int,int]]:
     '''
@@ -171,6 +171,10 @@ def compute_peptide_finding_metrics(true_start_stop: List[List[Tuple[int,int]]],
 
     return precision, recall, f1
     
+
+def add_dict_to_writer(metrics, writer, step, prefix=''):
+    for k, v in metrics.items():
+        writer.add_scalar(f'{prefix}/{k}', v, step)
 
 def compute_all_metrics(probs: np.ndarray, preds: np.ndarray, labels: np.ndarray, names: np.ndarray, true_df, windows: List[int] = [0,1,2,3]):
     # data = pickle.load(open(predictions_file, 'rb'))

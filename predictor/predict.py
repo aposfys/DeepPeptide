@@ -9,6 +9,7 @@ from concurrent.futures import ProcessPoolExecutor
 import os
 import json
 from tqdm.auto import tqdm
+import glob
 
 MODEL_LIST_ESM1B = [
     'checkpoints_esm1b/0/1/model.pt',
@@ -54,19 +55,15 @@ MODEL_LIST_ESM2 = [
     'checkpoints_esm2/4/2/model.pt',
     'checkpoints_esm2/4/3/model.pt',
 ]
-# ESM_DIR = 'esm'
-
-# MODEL_LIST = ['../'+x for x in MODEL_LIST] # local debug
 
 def main():
     parser = argparse.ArgumentParser('PeptideCRF peptide prediction tool', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--fastafile', '-ff' ,'-fasta', type=str, help='Amino acid sequences to predict in FASTA format.', required=True)
     parser.add_argument('--output_dir', '-od', type=str, help='Path at which to save the output files. Will be created if not existing already.', required=True)
     parser.add_argument('--batch_size', '-bs', type=int, help='Batch size (number of sequences).', default=10)
-    parser.add_argument('--output_fmt', '-of', default='img', const='esm2', nargs='?', choices=['img', 'json'], help='The output format. img also includes the json file.')
+    parser.add_argument('--output_fmt', '-of', default='json', const='json', nargs='?', choices=['img', 'json'], help='The output format. json produces no images and is faster.')
     parser.add_argument('--esm', default='esm2', const='esm2', nargs='?', choices=['esm2', 'esm1b'], help ='Which ESM version to use.')
     parser.add_argument('--esm_pt', default=None,  help ='Optional path to a ESM .pt checkpoint. If not specified, uses the default loading and caching of the esm package.')
-
 
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
@@ -74,7 +71,10 @@ def main():
     out_dict['INFO'] = {}
     out_dict['PREDICTIONS'] = {}
 
-    compute_marginals = args.output_fmt == 'img'
+    # Default to no images for speed/lightweight
+    compute_marginals = False 
+    if args.output_fmt == 'img':
+        compute_marginals = True
     
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -84,11 +84,14 @@ def main():
     out_dict['INFO']['size'] = len(ids)
 
     # 2. prepare embedder and models
-    #embeddings = utils.esm_embed(seqs, progress_bar=True, esm=args.esm, local_esm_path=args.esm_pt)
     embedder = utils.ESMEmbedder(args.esm, args.esm_pt)
-    #embeddings = torch.rand(len(seqs), 500, 1280 )
     batches = utils.batchify_sequences(seqs, args.batch_size)
+        
     models = utils.load_models(MODEL_LIST_ESM1B if args.esm == 'esm1b' else MODEL_LIST_ESM2)
+    
+    if not models:
+        print("Error: No models loaded.")
+        return    
     crf = utils.combine_crf(models)
     crf.to(device)
 
@@ -115,6 +118,16 @@ def main():
             for model in models:
                 model.to(device)
                 model.eval()
+                
+                # features = model.feature_extractor(embeddings.permute(0,2,1), mask)
+                # Note: ESMEmbedder returns [B, L, D]. LSTMCNN expects [B, D, L]?
+                # Check model.py:
+                # LSTMCNN.forward(embeddings, ...)
+                #   out = embeddings
+                #   self.conv1(out) -> Conv1d expects (N, C, L).
+                # So input must be (Batch, Channel/Dim, Length).
+                # ESMEmbedder output (via pad_sequence) is (Batch, Length, Dim).
+                # So we need permute(0, 2, 1).
 
                 features = model.feature_extractor(embeddings.permute(0,2,1), mask)
                 emissions = model.features_to_emissions(features)
@@ -131,8 +144,8 @@ def main():
 
             # postprocess on the fly
             for path in ensemble_paths:
-                peptides = utils.convert_path_to_peptide_borders(path, start_state=1, stop_state=50, offset=1)
-                propeptides = utils.convert_path_to_peptide_borders(path, start_state=51, stop_state=100, offset=1)
+                peptides = []
+                propeptides = utils.convert_path_to_peptide_borders(path, start_state=1, stop_state=50, offset=1)
                 preds = utils.simplify_preds([path])[0]
                 all_peptides.append(peptides)
                 all_propeptides.append(propeptides)
@@ -168,35 +181,35 @@ def main():
 
 
     # 4. write output
-    if args.output_fmt == 'img':
-
-        marginal_dict = {}
-        marginal_dict['INFO'] = out_dict['INFO'].copy()
-        marginal_dict['INFO']['dimensions'] = {0: 'None', 1: 'Peptide', 2: 'Propeptide'}
-        marginal_dict['PREDICTIONS'] = {}
-
-        jobs = []
-        with ProcessPoolExecutor() as executor:
-
-            for i in range(len(all_preds)):
-                pred, prob, name = all_preds[i], all_probs[i], ids[i]
-
-                marginal_dict['PREDICTIONS'][name] = {}
-                marginal_dict['PREDICTIONS'][name]['probabilities'] = prob.tolist()
-                marginal_dict['PREDICTIONS'][name]['predictions'] = pred
-
-                save_path = os.path.join(args.output_dir, f"{utils.slugify(name[1:])}.png") # skip > and replace non-alpha
-                out_dict['PREDICTIONS'][name]['figure'] = save_path
-                f = executor.submit(utils.plot_predictions, prob, pred, save_path)
-                jobs.append(f)
-
-        for job in jobs:
-            job.result()
+    # if args.output_fmt == 'img':
+    #
+    #     marginal_dict = {}
+    #     marginal_dict['INFO'] = out_dict['INFO'].copy()
+    #     marginal_dict['INFO']['dimensions'] = {0: 'None', 1: 'Peptide', 2: 'Propeptide'}
+    #     marginal_dict['PREDICTIONS'] = {}
+    #
+    #     jobs = []
+    #     with ProcessPoolExecutor() as executor:
+    #
+    #         for i in range(len(all_preds)):
+    #             pred, prob, name = all_preds[i], all_probs[i], ids[i]
+    #
+    #             marginal_dict['PREDICTIONS'][name] = {}
+    #             marginal_dict['PREDICTIONS'][name]['probabilities'] = prob.tolist()
+    #             marginal_dict['PREDICTIONS'][name]['predictions'] = pred
+    #
+    #             save_path = os.path.join(args.output_dir, f"{utils.slugify(name[1:])}.png") # skip > and replace non-alpha
+    #             out_dict['PREDICTIONS'][name]['figure'] = save_path
+    #             f = executor.submit(utils.plot_predictions, prob, pred, save_path)
+    #             jobs.append(f)
+    #
+    #     for job in jobs:
+    #         job.result()
 
     print(f'Writing JSON in {args.output_dir}')
-    json.dump(out_dict, open(os.path.join(args.output_dir, 'peptide_predictions.json'), 'w'), indent=1)
-    if args.output_fmt == 'img':
-        json.dump(marginal_dict, open(os.path.join(args.output_dir, 'sequence_outputs.json'), 'w'), indent=1)
+    json.dump(out_dict, open(os.path.join(args.output_dir, 'propeptide_predictions.json'), 'w'), indent=1)
+    # if args.output_fmt == 'img':
+    #     json.dump(marginal_dict, open(os.path.join(args.output_dir, 'sequence_outputs.json'), 'w'), indent=1)
 
     write_fancy_output(out_dict)
 

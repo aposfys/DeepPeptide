@@ -2,12 +2,20 @@ from itertools import groupby
 from collections import defaultdict
 import numpy as np
 from typing import List, Tuple
-from esm import pretrained
 import torch
 from tqdm.auto import tqdm
-from model import LSTMCNNCRF, CRF
-from esm import ProteinBertModel
+try:
+    from model import LSTMCNNCRF, CRF
+except ImportError:
+    from .model import LSTMCNNCRF, CRF
 import os
+import re
+import unicodedata
+# import matplotlib
+# import matplotlib.pyplot as plt
+# import seaborn as sns
+
+import esm
 
 def parse_fasta(fastafile: str):
     '''
@@ -47,23 +55,22 @@ def parse_fasta(fastafile: str):
 # same as esm_embed(), but keep models loaded.
 class ESMEmbedder():
 
-    def __init__(self, esm: str = 'esm2', local_esm_path: str = None):
+    def __init__(self, esm_version: str = 'esm2', local_esm_path: str = None):
 
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
         if local_esm_path is not None:
-           self.esm_model, self.esm_alphabet = pretrained.load_model_and_alphabet(local_esm_path)
-        elif esm == 'esm2':
-            self.esm_model, self.esm_alphabet = pretrained.load_model_and_alphabet('esm2_t33_650M_UR50D')
-        elif esm =='esm1b':
-            self.esm_model, self.esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
+            self.esm_model, self.alphabet = esm.pretrained.load_model_and_alphabet_local(local_esm_path)
         else:
-            raise NotImplementedError(esm)
-
+            if esm_version == 'esm1b':
+                self.esm_model, self.alphabet = esm.pretrained.esm1b_t33_650M_UR50S()
+            elif esm_version == 'esm2':
+                self.esm_model, self.alphabet = esm.pretrained.esm2_t33_650M_UR50D()
+            else:
+                raise NotImplementedError(esm_version)
+        self.batch_converter = self.alphabet.get_batch_converter()
         self.esm_model.eval()
         self.esm_model.to(self.device)
-        self.batch_converter = self.esm_alphabet.get_batch_converter()
-        self.return_layer = 33 if esm == 'esm2' else 32
 
         
     def __call__(self, sequences: List[str], repr_layers: bool=False, progress_bar: bool = False):
@@ -71,120 +78,25 @@ class ESMEmbedder():
         embeddings = []
         iterator = tqdm(sequences, desc='Embedding...', keep=False) if progress_bar else sequences
         for sequence in iterator:
-
-            with torch.no_grad():
-
-                data = [
-                    ("protein1", sequence),
-                ]
-                labels, strs, toks = self.batch_converter(data)
-
-                # repr_layers_list = [
-                #     (i + esm_model.num_layers + 1) % (esm_model.num_layers + 1) for i in range(repr_layers)
-                # ]
-
-                out = None
-
-                toks = toks.to(self.device)
-
-                minibatch_max_length = toks.size(1)
-
-                tokens_list = []
-                end = 0
-                while end <= minibatch_max_length:
-                    start = end
-                    end = start + 1022
-                    if end <= minibatch_max_length:
-                        # we are not on the last one, so make this shorter
-                        end = end - 300
-                    tokens = self.esm_model(toks[:, start:end], repr_layers=[32,33], return_contacts=False)["representations"][self.return_layer]#[repr_layers - 1]
-                    tokens_list.append(tokens)
-
-                out = torch.cat(tokens_list, dim=1).cpu()
-
-                # set nan to zeros
-                out[out!=out] = 0.0
-
-                res = out.transpose(0,1)[1:-1] 
-                seq_embedding = res[:,0]
-
-                embeddings.append(seq_embedding)
-
-        return embeddings
-
-
-        
-def esm_embed(sequences:List[str], repr_layers: int=33, progress_bar: bool = False, esm: str = 'esm2', local_esm_path: str = None) -> List[torch.Tensor]:
-    '''Generate the esm-1b embeddings for a sequence.'''
-    
-    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-
-    if local_esm_path is not None:
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet(local_esm_path)
-    elif esm == 'esm2':
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm2_t33_650M_UR50D')
-    elif esm =='esm1b':
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
-
-        # esm_args = torch.load(os.path.join(esm_dir, 'esm_model_args.pt'))
-        # esm_alphabet = torch.load(os.path.join(esm_dir, 'esm_model_alphabet.pt'))
-        # esm_model_state_dict = torch.load(os.path.join(esm_dir, 'esm_model_state_dict.pt'))
-        # esm_model = ProteinBertModel(
-        #     args=esm_args,
-        #     alphabet=esm_alphabet
-        # )
-        # esm_model.load_state_dict(esm_model_state_dict)
-    else:
-        raise NotImplementedError(esm)
-
-    esm_model.eval()
-    batch_converter = esm_alphabet.get_batch_converter()
-    esm_model.to(device)
-
-    embeddings = []
-    iterator = tqdm(sequences, desc='Embedding...') if progress_bar else sequences
-    for sequence in iterator:
-
-        with torch.no_grad():
-
             data = [
                 ("protein1", sequence),
             ]
-            labels, strs, toks = batch_converter(data)
+            batch_labels, batch_strs, batch_tokens = self.batch_converter(data)
+            batch_tokens = batch_tokens.to(self.device)
 
-            # repr_layers_list = [
-            #     (i + esm_model.num_layers + 1) % (esm_model.num_layers + 1) for i in range(repr_layers)
-            # ]
+            with torch.no_grad():
+                results = self.esm_model(batch_tokens, repr_layers=[33], return_contacts=True)
+            token_representations = results["representations"][33]
 
-            out = None
-
-            toks = toks.to(device)
-
-            minibatch_max_length = toks.size(1)
-
-            tokens_list = []
-            end = 0
-            while end <= minibatch_max_length:
-                start = end
-                end = start + 1022
-                if end <= minibatch_max_length:
-                    # we are not on the last one, so make this shorter
-                    end = end - 300
-                tokens = esm_model(toks[:, start:end], repr_layers=[32,33], return_contacts=False)["representations"][33 if esm == 'esm2' else 32]#[repr_layers - 1]
-                tokens_list.append(tokens)
-
-            out = torch.cat(tokens_list, dim=1).cpu()
-
-            # set nan to zeros
-            out[out!=out] = 0.0
-
-            res = out.transpose(0,1)[1:-1] 
-            seq_embedding = res[:,0]
-
+            seq_embedding = token_representations[0, 1:len(sequence) + 1].cpu()
             embeddings.append(seq_embedding)
 
-    return embeddings
-
+        return embeddings
+def esm_embed(sequences:List[str], repr_layers: int=33, progress_bar: bool = False, esm_version: str = 'esm2', local_esm_path: str = None) -> List[torch.Tensor]:
+    '''Generate the esm embeddings for a sequence.'''
+    
+    embedder = ESMEmbedder(esm_version, local_esm_path)
+    return embedder(sequences, repr_layers, progress_bar)
 
 def infer_sizes(state_dict):
     '''Retrieve the weight shapes for a LSTMCNNCRF checkpoint.'''
@@ -201,7 +113,7 @@ def load_models(model_list):
     for path in model_list:
         state_dict = torch.load(path, map_location='cpu')
         n_filters, filter_size, hidden_size = infer_sizes(state_dict)
-        model = LSTMCNNCRF(n_filters = n_filters, filter_size = filter_size, hidden_size= hidden_size, num_labels=3, num_states=101)
+        model = LSTMCNNCRF(n_filters = n_filters, filter_size = filter_size, hidden_size= hidden_size, num_labels=2, num_states=51)
         model.eval()
         model.load_state_dict(state_dict)
         models.append(model)
@@ -221,7 +133,7 @@ def combine_crf(models):
         ends.append(m.crf.end_transitions)
 
     with torch.no_grad():
-        crf = CRF(101, batch_first=True, include_start_end_transitions=True)
+        crf = CRF(51, batch_first=True, include_start_end_transitions=True)
         crf.transitions.data = torch.stack(transitions, dim=0).mean(dim=0)
         crf.start_transitions.data = torch.stack(starts, dim=0).mean(dim=0)
         crf.end_transitions.data = torch.stack(ends, dim=0).mean(dim=0)
@@ -293,8 +205,8 @@ def simplify_probs(probs):
     out = []
     for p in probs:
         probs_simple = p[:,:3].copy()
-        probs_simple[:,1] =  p[:,1:51].sum(axis=1)
-        probs_simple[:,2] =  p[:,51:].sum(axis=1)
+        probs_simple[:,1] =  0 # No peptide
+        probs_simple[:,2] =  p[:,1:].sum(axis=1) # Propeptide is now 1-50
         out.append(probs_simple)
 
     return out
@@ -303,10 +215,8 @@ def simplify_preds(preds):
 
     def simplify_fn(x):
         if x>0:
-            if x>50:
-                return 2
-            else:
-                return 1
+            # Map all non-zero states (1-50) to Propeptide (2)
+            return 2 
         else:
             return 0 
     
@@ -316,64 +226,57 @@ def simplify_preds(preds):
         out.append(pred_simple)
     return out
 
-import re
-import unicodedata
 def slugify(value):
     """
     Normalizes string, converts to lowercase, removes non-alpha characters,
     and converts spaces to hyphens.
     """
     value = unicodedata.normalize('NFKD', value)
-    value = re.sub('[^\w\s-]', '', value).strip().lower()
-    value = re.sub('[-\s]+', '-', value)
+    value = re.sub(r'[^\w\s-]', '', value).strip().lower()
+    value = re.sub(r'[-\s]+', '-', value)
     return value
 
-
-
-import matplotlib
-import matplotlib.pyplot as plt
-import seaborn as sns
-def plot_predictions(probs: np.ndarray, preds:List[int], save_path: str):
-
-    cmap = matplotlib.colors.ListedColormap(['#DFDBDB',  '#048BA8', '#E8AE68'], name='from_list', N=None)
-    fig = plt.figure(figsize=(12,4))
-    axs = matplotlib.gridspec.GridSpec(
-                    nrows=2,
-                    ncols=2,
-                    width_ratios=[1,0.01],
-                    wspace=0.1 / 6,
-                    # hspace=0.13 / height,
-                    height_ratios=[3,0.5],
-                )
-
-        
-    ax = fig.add_subplot(axs[0,0])
-    ax.plot(probs[:,0], fillstyle='full', label='None', linestyle='--', linewidth=0.5,  c=cmap.colors[0])
-    ax.plot(probs[:,1], fillstyle='full', label='Peptide', c=cmap.colors[1])
-    ax.plot(probs[:,2], fillstyle='full', label='Propeptide', c=cmap.colors[2])
-
-
-
-    ax.set_ylim(-0.01,1.05)
-    ax.axhline(0.5, linestyle='--', c='red', xmin=0, xmax=1, linewidth=1)
-    ax.set_ylabel('Probability')
-    ax.yaxis.grid(False)
-    ax.xaxis.grid()
-    ax.legend(loc='upper left')
-    ax.tick_params(axis='x', bottom=False, labelbottom=False)
-    sns.despine(ax=ax, bottom=False)
-
-    ax = fig.add_subplot(axs[1,0], sharex=ax)
-
-    norm = matplotlib.colors.BoundaryNorm([0,1,2],2)
-    preds = np.array([preds]) # make a 2D array so imshow works
-    ax.imshow(preds, cmap=cmap, aspect='auto', norm=norm)
-    ax.grid(False)
-    ax.tick_params(axis='y', left=False, labelleft=False)
-    sns.despine(ax=ax,left=True)
-    ax.set_ylabel('Prediction', rotation='horizontal', ha='right', va='center')
-    ax.set_xlabel('Sequence position')
-
-
-    plt.savefig(save_path)
-    plt.close()
+# def plot_predictions(probs: np.ndarray, preds:List[int], save_path: str):
+#
+#     cmap = matplotlib.colors.ListedColormap(['#DFDBDB',  '#048BA8', '#E8AE68'], name='from_list', N=None)
+#     fig = plt.figure(figsize=(12,4))
+#     axs = matplotlib.gridspec.GridSpec(
+#                     nrows=2,
+#                     ncols=2,
+#                     width_ratios=[1,0.01],
+#                     wspace=0.1 / 6,
+#                     # hspace=0.13 / height,
+#                     height_ratios=[3,0.5],
+#                 )
+#
+#
+#     ax = fig.add_subplot(axs[0,0])
+#     ax.plot(probs[:,0], fillstyle='full', label='None', linestyle='--', linewidth=0.5,  c=cmap.colors[0])
+#     ax.plot(probs[:,1], fillstyle='full', label='Peptide', c=cmap.colors[1])
+#     ax.plot(probs[:,2], fillstyle='full', label='Propeptide', c=cmap.colors[2])
+#
+#
+#
+#     ax.set_ylim(-0.01,1.05)
+#     ax.axhline(0.5, linestyle='--', c='red', xmin=0, xmax=1, linewidth=1)
+#     ax.set_ylabel('Probability')
+#     ax.yaxis.grid(False)
+#     ax.xaxis.grid()
+#     ax.legend(loc='upper left')
+#     ax.tick_params(axis='x', bottom=False, labelbottom=False)
+#     sns.despine(ax=ax, bottom=False)
+#
+#     ax = fig.add_subplot(axs[1,0], sharex=ax)
+#
+#     norm = matplotlib.colors.BoundaryNorm([0,1,2,3],3)
+#     preds = np.array([preds]) # make a 2D array so imshow works
+#     ax.imshow(preds, cmap=cmap, aspect='auto', norm=norm)
+#     ax.grid(False)
+#     ax.tick_params(axis='y', left=False, labelleft=False)
+#     sns.despine(ax=ax,left=True)
+#     ax.set_ylabel('Prediction', rotation='horizontal', ha='right', va='center')
+#     ax.set_xlabel('Sequence position')
+#
+#
+#     plt.savefig(save_path)
+#     plt.close()

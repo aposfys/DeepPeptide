@@ -48,9 +48,9 @@ def get_model(args: argparse.Namespace):
     if args.model == 'lstmcnncrf':
         model = LSTMCNNCRF(
             input_size = args.embedding_dim,
-            num_labels=3 if 'with_propeptides' in args.label_type else 2,
+            num_labels=2 if 'with_propeptides' in args.label_type else 2,
             dropout_input=args.dropout,
-            num_states= 101 if 'with_propeptides' in args.label_type else 51,
+            num_states= 51 if 'with_propeptides' in args.label_type else 51,
             n_filters=args.num_filters,
             hidden_size=args.hidden_size,
             filter_size=args.kernel_size, 
@@ -59,9 +59,9 @@ def get_model(args: argparse.Namespace):
     elif args.model == 'lstmcnncrf_simple':
         model = SimpleLSTMCNNCRF(
             input_size = args.embedding_dim,
-            num_labels=3 if args.label_type == 'simple_with_propeptides' else 2,
+            num_labels=2 if args.label_type == 'simple_with_propeptides' else 2,
             dropout_input=args.dropout,
-            num_states= 3 if args.label_type == 'simple_with_propeptides' else 2,
+            num_states= 2 if args.label_type == 'simple_with_propeptides' else 2,
             n_filters=args.num_filters,
             hidden_size=args.hidden_size,
             filter_size=args.kernel_size, 
@@ -73,9 +73,9 @@ def get_model(args: argparse.Namespace):
         model = SelfAttentionCRF(
             input_size = args.embedding_dim,
             hidden_size= args.hidden_size,
-            num_labels=3 if 'with_propeptides' in args.label_type else 2,
+            num_labels=2 if 'with_propeptides' in args.label_type else 2,
             dropout_input=args.dropout,
-            num_states= 121 if 'with_propeptides' in args.label_type else 61,
+            num_states= 51 if 'with_propeptides' in args.label_type else 61,
             n_heads=args.num_filters,
             attn_dropout=args.conv_dropout,
         )
@@ -222,19 +222,14 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
 
     return epoch_loss, probs, preds, true, labels
 
-
-
-
-
 def parse_arguments():
     '''Parse arguments, prepare output directory and dump run configuration.'''
     p = argparse.ArgumentParser()
 
-    p.add_argument('--embeddings_dir', type=str, help='Embeddings dir produced by `extract.py`', default = '/data3/fegt_data/embeddings/')
-    p.add_argument('--data_file', '-df', type=str, help='Sequences with Graph-Part headers', default = 'data/uniprot_12052022_cv_5_50/labeled_sequences.csv')
-    p.add_argument('--partitioning_file', '-pf', type=str, help='Graph-Part output. Assume train-val-test split.', default = 'data/uniprot_12052022_cv_5_50/graphpart_assignments.csv')
-    p.add_argument('--embedding', '-em', type=str, help='Sequence embedding strategy.', default='precomputed')
-    p.add_argument('--embedding_dim', '-ed', type=int, help='Sequence embedding dimension.', default=1280)
+    p.add_argument('--embeddings_dir', type=str, help='Embeddings dir produced by `extract.py`', default = 'data/embeddings/')
+    p.add_argument('--data_file', '-df', type=str, help='Sequences with Graph-Part headers', default = 'data/labeled_sequences.csv')
+    p.add_argument('--partitioning_file', '-pf', type=str, help='Graph-Part output. Assume train-val-test split.', default = 'data/graphpart_assignments.csv')
+    p.add_argument('--embedding_dim', '-ed', type=int, help='Sequence embedding dimension.', default=1536)
 
     p.add_argument('--model', '-m', type=str, default='lstmcnncrf')
 
