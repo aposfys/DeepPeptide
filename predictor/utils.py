@@ -204,9 +204,9 @@ def convert_path_to_peptide_borders(pred: List[int], start_state, stop_state, of
 def simplify_probs(probs):
     out = []
     for p in probs:
-        probs_simple = p[:,:3].copy()
-        probs_simple[:,1] =  0 # No peptide
-        probs_simple[:,2] =  p[:,1:].sum(axis=1) # Propeptide is now 1-50
+        probs_simple = np.zeros((p.shape[0], 2), dtype=p.dtype)
+        probs_simple[:,0] = p[:,0] # Background
+        probs_simple[:,1] = p[:,1:].sum(axis=1) # Propeptide is now 1-50
         out.append(probs_simple)
 
     return out
@@ -215,8 +215,8 @@ def simplify_preds(preds):
 
     def simplify_fn(x):
         if x>0:
-            # Map all non-zero states (1-50) to Propeptide (2)
-            return 2 
+            # Map all non-zero states (1-50) to Propeptide (1)
+            return 1
         else:
             return 0 
     

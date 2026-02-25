@@ -13,7 +13,7 @@ class CRFBaseModel(nn.Module):
     def __init__(
         self,
         num_labels: int = 2, #logits (=emissions) to produce by the NN
-        num_states = 61 # total number of states in the state space model
+        num_states = 51 # total number of states in the state space model
         ) -> None:
 
 
@@ -56,6 +56,9 @@ class CRFBaseModel(nn.Module):
 
         allowed_state_transitions.append((max_len-1,max_len)) # peptide end position -1 to peptide end position
         # logic of this state space model is that the end state is the same for all peptides, regardless their length.
+
+        # add a self loop on the pre-last state. Should help avoid issues at inference when longer stuff might show up.
+        allowed_state_transitions.append((max_len-1, max_len-1))
 
         # Removed multi-branch logic (101 states) as we only predict propeptides now (51 states).
 
@@ -206,7 +209,7 @@ class LSTMCNNCRF(CRFBaseModel):
         hidden_size: int = 128,
         num_lstm_layers : int = 1,
         num_labels: int = 2, #logits (=emissions) to produce by the NN
-        num_states = 61 # total number of states in the state space model
+        num_states = 51 # total number of states in the state space model
         ) -> None:
 
 

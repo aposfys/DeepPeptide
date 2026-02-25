@@ -479,18 +479,13 @@ class PrecomputedCSVForOverlapCRFDataset(Dataset):
         self.data = data
         self.names = data.index.tolist()
 
-        coordinate_strings = data['coordinates'].tolist()
         propeptide_coordinate_strings = data['propeptide_coordinates'].tolist()
-        coordinates = [parse_coordinate_string(x, merge_overlaps=False) for x in coordinate_strings]
         propeptide_coordinates = [parse_coordinate_string(x, merge_overlaps=False) for x in propeptide_coordinate_strings]
 
         # NOTE we feed .data to our metrics fn. it expects some more columns.
-        self.data['true_peptides'] = coordinates
         self.data['true_propeptides'] = propeptide_coordinates
 
-        self.peptides_only = coordinates
         self.propeptides = propeptide_coordinates
-        self.peptides = [(x,y) for x,y, in zip(coordinates, propeptide_coordinates)] # data loading works exactly the same. only metrics computation needs to unpack this.
 
 
         self.sequences = data['sequence'].tolist()
@@ -502,17 +497,16 @@ class PrecomputedCSVForOverlapCRFDataset(Dataset):
         return len(self.names)
 
     @staticmethod 
-    def _sample_from_overlapping_peptides(peptide_coordinates, propeptide_coordinates):
+    def _sample_from_overlapping_peptides(propeptide_coordinates):
         '''Finds overlapping groups of peptides. Samples one peptide from each group.'''
-        peptides_to_keep = []
         propeptides_to_keep = []
 
         # https://stackoverflow.com/questions/48243507/group-rows-by-overlapping-ranges
-        all_peptides = peptide_coordinates + propeptide_coordinates
+        all_peptides = propeptide_coordinates
         if not all_peptides:
-             return [], []
+             return []
 
-        types = ['Peptide'] * len(peptide_coordinates) + ['Propeptide'] * len(propeptide_coordinates)
+        types = ['Propeptide'] * len(propeptide_coordinates)
         starts, ends = zip(*all_peptides)
 
         df = pd.DataFrame([starts, ends, types], index = ['start', 'end', 'type']).T
@@ -523,12 +517,9 @@ class PrecomputedCSVForOverlapCRFDataset(Dataset):
 
         for group, group_df in df.groupby('group'):
             peptide = group_df.sample(1).iloc[0] # returns df, but we need the single row
-            if peptide['type'] == 'Peptide':
-                peptides_to_keep.append((peptide['start'], peptide['end']))
-            else:
-                propeptides_to_keep.append((peptide['start'], peptide['end']))
+            propeptides_to_keep.append((peptide['start'], peptide['end']))
 
-        return peptides_to_keep, propeptides_to_keep
+        return propeptides_to_keep
 
 
 
@@ -542,17 +533,16 @@ class PrecomputedCSVForOverlapCRFDataset(Dataset):
             raise FileNotFoundError(f'Could not find sequence hash {seq_hash} for {self.names[index]} in {self.embeddings_dir}.')
 
         # Ignore peptides, only use propeptides
-        _, propeptides = self.peptides[index]
-        _, propeptides = self._sample_from_overlapping_peptides([], propeptides)
+        propeptides = self.propeptides[index]
+        propeptides = self._sample_from_overlapping_peptides(propeptides)
 
         # Map propeptides to states 1-50 (previously 51-100)
         label = peptide_list_to_label_sequence(propeptides, seq_len, start_state=1, max_len=50) 
         
         label = torch.from_numpy(label)
         mask = torch.ones(embeddings.shape[0])
-        peptides = self.peptides[index]
 
-        return embeddings, mask, label, self.peptides[index] # this is for the metrics.
+        return embeddings, mask, label, self.propeptides[index] # this is for the metrics.
 
     @staticmethod
     def collate_fn(batch: List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, List[np.ndarray]]:

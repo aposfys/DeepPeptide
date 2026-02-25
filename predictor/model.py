@@ -96,7 +96,7 @@ class CRFBaseModel(nn.Module):
     def __init__(
         self,
         num_labels: int = 2, #logits (=emissions) to produce by the NN
-        num_states = 61 # total number of states in the state space model
+        num_states = 51 # total number of states in the state space model
         ) -> None:
 
 
@@ -210,7 +210,7 @@ class LSTMCNNCRF(CRFBaseModel):
         hidden_size: int = 128,
         num_lstm_layers : int = 1,
         num_labels: int = 2, #logits (=emissions) to produce by the NN
-        num_states = 61 # total number of states in the state space model
+        num_states = 51 # total number of states in the state space model
         ) -> None:
 
 

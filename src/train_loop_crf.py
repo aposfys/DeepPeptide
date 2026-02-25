@@ -140,7 +140,7 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
 
         print(f'Epoch {epoch} completed. Validation loss {valid_loss:.2f}')
 
-        stopping_metric = (valid_metrics['f1 peptides'] + valid_metrics['f1 propeptides'])/2#(valid_metrics['F1 +- 3 peptide'] + valid_metrics['F1 +- 3 propeptide'])/2
+        stopping_metric = valid_metrics['f1 propeptides']#(valid_metrics['F1 +- 3 peptide'] + valid_metrics['F1 +- 3 propeptide'])/2
         if stopping_metric > previous_best:
             previous_best = stopping_metric
             best_val_metrics = valid_metrics

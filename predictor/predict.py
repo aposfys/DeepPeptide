@@ -97,7 +97,6 @@ def main():
 
     # 3. predict
     all_probs = [] # list of len (n_seqs)
-    all_peptides = [] # list of len (n_seqs)
     all_propeptides = [] # list of len (n_seqs)
     all_preds = [] # list of len (n_seqs)
 
@@ -144,10 +143,8 @@ def main():
 
             # postprocess on the fly
             for path in ensemble_paths:
-                peptides = []
                 propeptides = utils.convert_path_to_peptide_borders(path, start_state=1, stop_state=50, offset=1)
                 preds = utils.simplify_preds([path])[0]
-                all_peptides.append(peptides)
                 all_propeptides.append(propeptides)
                 all_preds.append(preds)
 
@@ -167,16 +164,12 @@ def main():
 
 
     # 3. make json-structured output.
-    for name, peptides, propeptides in zip(ids, all_peptides, all_propeptides):
-        # peptides = utils.convert_path_to_peptide_borders(path, start_state=1, stop_state=50, offset=1)
-        # propeptides = utils.convert_path_to_peptide_borders(path, start_state=51, stop_state=100, offset=1)
+    for name, propeptides in zip(ids, all_propeptides):
 
         out_dict['PREDICTIONS'][name] = {}
-        out_dict['PREDICTIONS'][name]['peptides'] = []
-        for i in range(len(peptides)):
-            out_dict['PREDICTIONS'][name]['peptides'].append({'start': peptides[i][0], 'end': peptides[i][1], 'type': 'Peptide'})
+        out_dict['PREDICTIONS'][name]['propeptides'] = []
         for i in range(len(propeptides)):
-            out_dict['PREDICTIONS'][name]['peptides'].append({'start': propeptides[i][0], 'end': propeptides[i][1], 'type': 'Propeptide'})
+            out_dict['PREDICTIONS'][name]['propeptides'].append({'start': propeptides[i][0], 'end': propeptides[i][1], 'type': 'Propeptide'})
 
 
 
