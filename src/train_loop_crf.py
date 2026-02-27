@@ -48,9 +48,9 @@ def get_model(args: argparse.Namespace):
     if args.model == 'lstmcnncrf':
         model = LSTMCNNCRF(
             input_size = args.embedding_dim,
-            num_labels=3 if 'with_propeptides' in args.label_type else 2,
+            num_labels=2,
             dropout_input=args.dropout,
-            num_states= 101 if 'with_propeptides' in args.label_type else 51,
+            num_states= 51,
             n_filters=args.num_filters,
             hidden_size=args.hidden_size,
             filter_size=args.kernel_size, 
@@ -140,7 +140,7 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
 
         print(f'Epoch {epoch} completed. Validation loss {valid_loss:.2f}')
 
-        stopping_metric = (valid_metrics['f1 peptides'] + valid_metrics['f1 propeptides'])/2#(valid_metrics['F1 +- 3 peptide'] + valid_metrics['F1 +- 3 propeptide'])/2
+        stopping_metric = valid_metrics['f1 propeptides'] #(valid_metrics['f1 peptides'] + valid_metrics['f1 propeptides'])/2#(valid_metrics['F1 +- 3 peptide'] + valid_metrics['F1 +- 3 propeptide'])/2
         if stopping_metric > previous_best:
             previous_best = stopping_metric
             best_val_metrics = valid_metrics

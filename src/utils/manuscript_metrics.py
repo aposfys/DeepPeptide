@@ -12,8 +12,8 @@ import pickle
 from typing import List, Tuple
 from tqdm.auto import tqdm
 
-PEPTIDE_START_STATE, PEPTIDE_END_STATE = 1, 50
-PROPEPTIDE_START_STATE, PROPEPTIDE_END_STATE = 51, 100
+PEPTIDE_START_STATE, PEPTIDE_END_STATE = -1, -1
+PROPEPTIDE_START_STATE, PROPEPTIDE_END_STATE = 1, 50
 
 def convert_path_to_peptide_borders(pred: List[int], start_state, stop_state, offset: int=0) -> List[Tuple[int,int]]:
     '''
@@ -184,26 +184,26 @@ def compute_all_metrics(probs: np.ndarray, preds: np.ndarray, labels: np.ndarray
     
     metrics = []
     for tolerance in windows:
-        true = df['true_peptides'].tolist()
-        pred = df['pred_peptides'].tolist()
-        prec_pep, rec_pep, f1_pep = compute_peptide_finding_metrics(true, pred, tolerance=tolerance)
+        # true = df['true_peptides'].tolist()
+        # pred = df['pred_peptides'].tolist()
+        # prec_pep, rec_pep, f1_pep = compute_peptide_finding_metrics(true, pred, tolerance=tolerance)
         true = df['true_propeptides'].tolist()
         pred = df['pred_propeptides'].tolist()
         prec_pro, rec_pro, f1_pro = compute_peptide_finding_metrics(true, pred, tolerance=tolerance)
-        true = df['true_peptides'].tolist() + df['true_propeptides'].tolist()
-        pred = df['pred_peptides'].tolist() + df['pred_propeptides'].tolist()
-        prec_all, rec_all, f1_all = compute_peptide_finding_metrics(true, pred, tolerance=tolerance)
+        # true = df['true_peptides'].tolist() + df['true_propeptides'].tolist()
+        # pred = df['pred_peptides'].tolist() + df['pred_propeptides'].tolist()
+        # prec_all, rec_all, f1_all = compute_peptide_finding_metrics(true, pred, tolerance=tolerance)
 
         metrics.append({
-            'precision peptides': prec_pep,
-            'recall peptides': rec_pep,
-            'f1 peptides': f1_pep,
+            'precision peptides': 0, #prec_pep,
+            'recall peptides': 0, #rec_pep,
+            'f1 peptides': 0, #f1_pep,
             'precision propeptides': prec_pro,
             'recall propeptides': rec_pro,
             'f1 propeptides': f1_pro,
-            'precision all': prec_all,
-            'recall all': rec_all,
-            'f1 all': f1_all,
+            'precision all': prec_pro, #prec_all,
+            'recall all': rec_pro, #rec_all,
+            'f1 all': f1_pro, #f1_all,
         })
     
     return metrics

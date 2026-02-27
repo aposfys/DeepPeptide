@@ -537,16 +537,18 @@ class PrecomputedCSVForOverlapCRFDataset(Dataset):
             raise FileNotFoundError(f'Could not find sequence hash {seq_hash} for {self.names[index]} in {self.embeddings_dir}.')
 
         peptides, propeptides = self.peptides[index]
-        peptides, propeptides = self._sample_from_overlapping_peptides(peptides, propeptides)
+        peptides, propeptides = self._sample_from_overlapping_peptides([], propeptides)
 
-        label = peptide_list_to_label_sequence(peptides, seq_len, max_len = 50) 
-        propeptide_label = peptide_list_to_label_sequence(propeptides, seq_len, start_state=51, max_len=50) 
-        label = label + propeptide_label # numpy arrays with no overlap at nonzero positions so we can just add the two.
+        # label = peptide_list_to_label_sequence(peptides, seq_len, max_len = 50)
+        # propeptide_label = peptide_list_to_label_sequence(propeptides, seq_len, start_state=51, max_len=50)
+        # label = label + propeptide_label # numpy arrays with no overlap at nonzero positions so we can just add the two.
 
+        # map propeptides to state 1. Ignore peptides.
+        label = peptide_list_to_label_sequence(propeptides, seq_len, start_state=1, max_len=50)
 
         label = torch.from_numpy(label)
         mask = torch.ones(embeddings.shape[0])
-        peptides = self.peptides[index]
+        # peptides = self.peptides[index]
 
         return embeddings, mask, label, self.peptides[index] # this is for the metrics.
 
