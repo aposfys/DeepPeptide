@@ -157,9 +157,12 @@ class SequenceTaggingLSTMCNN(nn.Module):
     @staticmethod
     def _esm_embed(sequence:str, device: torch.device, repr_layers: int=33) -> torch.Tensor:
 
+        try:
+            from esm import pretrained
+            esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
+        except AttributeError:
+            esm_model, esm_alphabet = torch.hub.load("facebookresearch/esm:main", "esm1b_t33_650M_UR50S")
 
-        from esm import pretrained
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
         batch_converter = esm_alphabet.get_batch_converter()
         esm_model.to(device)
 
@@ -430,9 +433,12 @@ class SequenceTaggingLSTM(nn.Module):
     @staticmethod
     def _esm_embed(sequence:str, device: torch.device, repr_layers: int=33) -> torch.Tensor:
 
+        try:
+            from esm import pretrained
+            esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
+        except AttributeError:
+            esm_model, esm_alphabet = torch.hub.load("facebookresearch/esm:main", "esm1b_t33_650M_UR50S")
 
-        from esm import pretrained
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
         batch_converter = esm_alphabet.get_batch_converter()
         esm_model.to(device)
 
@@ -621,9 +627,12 @@ class SequenceTaggingLSTMCNNCRF(nn.Module):
     @staticmethod
     def _esm_embed(sequence:str, device: torch.device, repr_layers: int=33) -> torch.Tensor:
 
+        try:
+            from esm import pretrained
+            esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
+        except AttributeError:
+            esm_model, esm_alphabet = torch.hub.load("facebookresearch/esm:main", "esm1b_t33_650M_UR50S")
 
-        from esm import pretrained
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
         batch_converter = esm_alphabet.get_batch_converter()
         esm_model.to(device)
 
