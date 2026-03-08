@@ -177,7 +177,7 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
 
     for idx, batch in enumerate(loader):
         
-        model.zero_grad()
+        optimizer.zero_grad()
 
         embeddings, mask, label, peptides= batch
         embeddings = embeddings.to(device)

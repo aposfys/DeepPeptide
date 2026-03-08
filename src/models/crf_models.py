@@ -152,7 +152,9 @@ class CRFBaseModel(nn.Module):
         protein = ESMProtein(sequence=sequence)
 
         with torch.no_grad():
-            output = model.forward_and_sample(protein, GenerationConfig(track="sequence", num_steps=1))
+            # ESM3 encoding and inference
+            tensor = model.encode(protein)
+            output = model(tensor.sequence_tokens.unsqueeze(0))
 
             seq_embedding = output.hidden_states[0, 1:-1, :]
             # force to float32 for MacOS / MPS compatibility
