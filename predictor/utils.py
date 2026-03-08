@@ -2,7 +2,6 @@ from itertools import groupby
 from collections import defaultdict
 import numpy as np
 from typing import List, Tuple
-from esm import pretrained
 import torch
 from tqdm.auto import tqdm
 from model import LSTMCNNCRF, CRF
@@ -47,67 +46,138 @@ def parse_fasta(fastafile: str):
 # same as esm_embed(), but keep models loaded.
 class ESMEmbedder():
 
-    def __init__(self, esm: str = 'esm2', local_esm_path: str = None):
+    def __init__(self, esm: str = 'esm3_sm_open_v1', local_esm_path: str = None):
+        from esm.models.esm3 import ESM3
+        from esm.sdk.api import ESM3InferenceClient
 
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-        if local_esm_path is not None:
-           self.esm_model, self.esm_alphabet = pretrained.load_model_and_alphabet(local_esm_path)
-        elif esm == 'esm2':
-            self.esm_model, self.esm_alphabet = pretrained.load_model_and_alphabet('esm2_t33_650M_UR50D')
-        elif esm =='esm1b':
-            self.esm_model, self.esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
-        else:
-            raise NotImplementedError(esm)
+        self.esm = esm
 
-        self.esm_model.eval()
-        self.esm_model.to(self.device)
-        self.batch_converter = self.esm_alphabet.get_batch_converter()
-        self.return_layer = 33 if esm == 'esm2' else 32
+        if esm in ('esm3_sm_open_v1', 'esm3'):
+            from esm.models.esm3 import ESM3
+            from esm.sdk.api import ESM3InferenceClient
+            self.esm_model = ESM3.from_pretrained('esm3_sm_open_v1')
+            self.esm_model.eval()
+            self.esm_model.to(self.device)
+        else:
+            from esm import pretrained
+            if local_esm_path is not None:
+                self.esm_model, self.esm_alphabet = pretrained.load_model_and_alphabet(local_esm_path)
+            elif esm == 'esm2':
+                self.esm_model, self.esm_alphabet = pretrained.load_model_and_alphabet('esm2_t33_650M_UR50D')
+            elif esm == 'esm1b':
+                self.esm_model, self.esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
+            else:
+                raise NotImplementedError(esm)
+            self.esm_model.eval()
+            self.esm_model.to(self.device)
+            self.batch_converter = self.esm_alphabet.get_batch_converter()
+            self.return_layer = 33 if esm == 'esm2' else 32
 
         
     def __call__(self, sequences: List[str], repr_layers: bool=False, progress_bar: bool = False):
-        '''Embed the provided list of sequences. Return a list of tensors.'''
         embeddings = []
         iterator = tqdm(sequences, desc='Embedding...', keep=False) if progress_bar else sequences
+
+        if self.esm in ('esm3_sm_open_v1', 'esm3'):
+            from esm.sdk.api import ESMProtein, GenerationConfig
+            for sequence in iterator:
+                with torch.no_grad():
+                    protein = ESMProtein(sequence=sequence)
+                    output = self.esm_model.forward_and_sample(protein, GenerationConfig(track="sequence", num_steps=1))
+
+                    seq_embedding = output.hidden_states[0, 1:-1, :]
+                    seq_embedding = seq_embedding.to(torch.float32).cpu()
+                    embeddings.append(seq_embedding)
+        else:
+            for sequence in iterator:
+                with torch.no_grad():
+                    data = [("protein1", sequence)]
+                    labels, strs, toks = self.batch_converter(data)
+                    out = None
+                    toks = toks.to(self.device)
+                    minibatch_max_length = toks.size(1)
+                    tokens_list = []
+                    end = 0
+                    while end <= minibatch_max_length:
+                        start = end
+                        end = start + 1022
+                        if end <= minibatch_max_length:
+                            end = end - 300
+                        tokens = self.esm_model(toks[:, start:end], repr_layers=[32,33], return_contacts=False)["representations"][self.return_layer]
+                        tokens_list.append(tokens)
+
+                    out = torch.cat(tokens_list, dim=1).cpu()
+                    out[out!=out] = 0.0
+                    res = out.transpose(0,1)[1:-1]
+                    seq_embedding = res[:,0]
+                    embeddings.append(seq_embedding)
+
+        return embeddings
+
+
+
+def esm_embed(sequences:List[str], repr_layers: int=33, progress_bar: bool = False, esm: str = 'esm3_sm_open_v1', local_esm_path: str = None) -> List[torch.Tensor]:
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
+    if esm in ('esm3_sm_open_v1', 'esm3'):
+        from esm.models.esm3 import ESM3
+        from esm.sdk.api import ESM3InferenceClient, ESMProtein, GenerationConfig
+        esm_model = ESM3.from_pretrained('esm3_sm_open_v1')
+        esm_model.eval()
+        esm_model.to(device)
+
+        embeddings = []
+        iterator = tqdm(sequences, desc='Embedding...') if progress_bar else sequences
         for sequence in iterator:
-
             with torch.no_grad():
+                protein = ESMProtein(sequence=sequence)
+                output = esm_model.forward_and_sample(protein, GenerationConfig(track="sequence", num_steps=1))
+                seq_embedding = output.hidden_states[0, 1:-1, :]
+                seq_embedding = seq_embedding.to(torch.float32).cpu()
+                embeddings.append(seq_embedding)
 
-                data = [
-                    ("protein1", sequence),
-                ]
-                labels, strs, toks = self.batch_converter(data)
+        return embeddings
+    else:
+        from esm import pretrained
+        if local_esm_path is not None:
+            esm_model, esm_alphabet = pretrained.load_model_and_alphabet(local_esm_path)
+        elif esm == 'esm2':
+            esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm2_t33_650M_UR50D')
+        elif esm =='esm1b':
+            esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
+        else:
+            raise NotImplementedError(esm)
 
-                # repr_layers_list = [
-                #     (i + esm_model.num_layers + 1) % (esm_model.num_layers + 1) for i in range(repr_layers)
-                # ]
+        esm_model.eval()
+        batch_converter = esm_alphabet.get_batch_converter()
+        esm_model.to(device)
+        return_layer = 33 if esm == 'esm2' else 32
 
+        embeddings = []
+        iterator = tqdm(sequences, desc='Embedding...') if progress_bar else sequences
+        for sequence in iterator:
+            with torch.no_grad():
+                data = [("protein1", sequence)]
+                labels, strs, toks = batch_converter(data)
                 out = None
-
-                toks = toks.to(self.device)
-
+                toks = toks.to(device)
                 minibatch_max_length = toks.size(1)
-
                 tokens_list = []
                 end = 0
                 while end <= minibatch_max_length:
                     start = end
                     end = start + 1022
                     if end <= minibatch_max_length:
-                        # we are not on the last one, so make this shorter
                         end = end - 300
-                    tokens = self.esm_model(toks[:, start:end], repr_layers=[32,33], return_contacts=False)["representations"][self.return_layer]#[repr_layers - 1]
+                    tokens = esm_model(toks[:, start:end], repr_layers=[32,33], return_contacts=False)["representations"][return_layer]
                     tokens_list.append(tokens)
 
                 out = torch.cat(tokens_list, dim=1).cpu()
-
-                # set nan to zeros
                 out[out!=out] = 0.0
-
                 res = out.transpose(0,1)[1:-1] 
                 seq_embedding = res[:,0]
-
                 embeddings.append(seq_embedding)
 
         return embeddings
@@ -324,8 +394,8 @@ def slugify(value):
     and converts spaces to hyphens.
     """
     value = unicodedata.normalize('NFKD', value)
-    value = re.sub('[^\w\s-]', '', value).strip().lower()
-    value = re.sub('[-\s]+', '-', value)
+    value = re.sub(r'[^\w\s-]', '', value).strip().lower()
+    value = re.sub(r'[-\s]+', '-', value)
     return value
 
 

@@ -4,7 +4,7 @@ import torch.nn as nn
 
 class LSTMCNN(nn.Module):
 
-    def __init__(self, input_size: int = 1280, dropout_input=0.25, n_filters=32, filter_size=3, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
+    def __init__(self, input_size: int = 1536, dropout_input=0.25, n_filters=32, filter_size=3, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
         '''
         bidirectional LSTM - CNN model to process sequence data. returns output of same length as the input.
         
@@ -88,7 +88,7 @@ class LSTMCNN(nn.Module):
 class SequenceTaggingLSTMCNN(nn.Module):
     def __init__(
         self,
-        input_size: int = 1280,
+        input_size: int = 1536,
         dropout_input: float = 0.25,
         n_filters: int = 32,
         filter_size: int = 3,
@@ -157,46 +157,24 @@ class SequenceTaggingLSTMCNN(nn.Module):
     @staticmethod
     def _esm_embed(sequence:str, device: torch.device, repr_layers: int=33) -> torch.Tensor:
 
+        from esm.models.esm3 import ESM3
+        from esm.sdk.api import ESM3InferenceClient, ESMProtein, GenerationConfig
 
-        from esm import pretrained
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
-        batch_converter = esm_alphabet.get_batch_converter()
-        esm_model.to(device)
+        model: ESM3InferenceClient = ESM3.from_pretrained("esm3_sm_open_v1").to(device)
+        model.eval()
 
+        protein = ESMProtein(sequence=sequence)
 
-        data = [
-            ("protein1", sequence),
-        ]
-        labels, strs, toks = batch_converter(data)
-
-        repr_layers_list = [
-            (i + esm_model.num_layers + 1) % (esm_model.num_layers + 1) for i in range(repr_layers)
-        ]
-
-        out = None
-
-        toks = toks.to(device)
-
-        minibatch_max_length = toks.size(1)
-
-        tokens_list = []
-        end = 0
-        while end <= minibatch_max_length:
-            start = end
-            end = start + 1022
-            if end <= minibatch_max_length:
-                # we are not on the last one, so make this shorter
-                end = end - 300
-            tokens = esm_model(toks[:, start:end], repr_layers=repr_layers_list, return_contacts=False)["representations"][repr_layers - 1]
-            tokens_list.append(tokens)
-
-        out = torch.cat(tokens_list, dim=1).cpu()
-
-        # set nan to zeros
-        out[out!=out] = 0.0
-
-        res = out.transpose(0,1)[1:-1] 
-        seq_embedding = res[:,0]
+        with torch.no_grad():
+            output = model.forward_and_sample(protein, GenerationConfig(track="sequence", num_steps=1))
+            # Output hidden_states usually includes bos and eos tokens, but ESM-1b/2 typically stripped them.
+            # ESM3 structure: output.hidden_states is (1, seq_len+2, 1536) ?
+            # We'll extract and strip bos/eos.
+            # Note: ESMProtein automatically adds BOS/EOS if the tokenization does so.
+            # ESM3 tokenizer: <cls> ... <eos>. So we slice [1:-1]
+            seq_embedding = output.hidden_states[0, 1:-1, :]
+            # force to float32 for MacOS / MPS compatibility
+            seq_embedding = seq_embedding.to(torch.float32).cpu()
 
         return seq_embedding
 
@@ -216,7 +194,7 @@ class SequenceTaggingLSTMCNN(nn.Module):
 
 
 class LSTM(nn.Module):
-    def __init__(self, input_size: int = 1280, dropout_input=0.25, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
+    def __init__(self, input_size: int = 1536, dropout_input=0.25, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
         
         super().__init__()
 
@@ -282,7 +260,7 @@ class LSTM(nn.Module):
 
 class CNN(nn.Module):
 
-    def __init__(self, input_size: int = 1280, dropout_input=0.25, n_filters=32, filter_size=3, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
+    def __init__(self, input_size: int = 1536, dropout_input=0.25, n_filters=32, filter_size=3, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
         '''
         bidirectional LSTM - CNN model to process sequence data. returns output of same length as the input.
         
@@ -366,7 +344,7 @@ class CNN(nn.Module):
 class SequenceTaggingLSTM(nn.Module):
     def __init__(
         self,
-        input_size: int = 1280,
+        input_size: int = 1536,
         dropout_input: float = 0.25,
         hidden_size: int = 64,
         classifier_hidden_size: int = 64,
@@ -430,46 +408,24 @@ class SequenceTaggingLSTM(nn.Module):
     @staticmethod
     def _esm_embed(sequence:str, device: torch.device, repr_layers: int=33) -> torch.Tensor:
 
+        from esm.models.esm3 import ESM3
+        from esm.sdk.api import ESM3InferenceClient, ESMProtein, GenerationConfig
 
-        from esm import pretrained
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
-        batch_converter = esm_alphabet.get_batch_converter()
-        esm_model.to(device)
+        model: ESM3InferenceClient = ESM3.from_pretrained("esm3_sm_open_v1").to(device)
+        model.eval()
 
+        protein = ESMProtein(sequence=sequence)
 
-        data = [
-            ("protein1", sequence),
-        ]
-        labels, strs, toks = batch_converter(data)
-
-        repr_layers_list = [
-            (i + esm_model.num_layers + 1) % (esm_model.num_layers + 1) for i in range(repr_layers)
-        ]
-
-        out = None
-
-        toks = toks.to(device)
-
-        minibatch_max_length = toks.size(1)
-
-        tokens_list = []
-        end = 0
-        while end <= minibatch_max_length:
-            start = end
-            end = start + 1022
-            if end <= minibatch_max_length:
-                # we are not on the last one, so make this shorter
-                end = end - 300
-            tokens = esm_model(toks[:, start:end], repr_layers=repr_layers_list, return_contacts=False)["representations"][repr_layers - 1]
-            tokens_list.append(tokens)
-
-        out = torch.cat(tokens_list, dim=1).cpu()
-
-        # set nan to zeros
-        out[out!=out] = 0.0
-
-        res = out.transpose(0,1)[1:-1] 
-        seq_embedding = res[:,0]
+        with torch.no_grad():
+            output = model.forward_and_sample(protein, GenerationConfig(track="sequence", num_steps=1))
+            # Output hidden_states usually includes bos and eos tokens, but ESM-1b/2 typically stripped them.
+            # ESM3 structure: output.hidden_states is (1, seq_len+2, 1536) ?
+            # We'll extract and strip bos/eos.
+            # Note: ESMProtein automatically adds BOS/EOS if the tokenization does so.
+            # ESM3 tokenizer: <cls> ... <eos>. So we slice [1:-1]
+            seq_embedding = output.hidden_states[0, 1:-1, :]
+            # force to float32 for MacOS / MPS compatibility
+            seq_embedding = seq_embedding.to(torch.float32).cpu()
 
         return seq_embedding
 
@@ -491,7 +447,7 @@ class SequenceTaggingLSTM(nn.Module):
 class SequenceTaggingCNN(nn.Module):
     def __init__(
         self,
-        input_size: int = 1280,
+        input_size: int = 1536,
         dropout_input: float = 0.25,
         n_filters: int = 32,
         filter_size: int = 3,
@@ -560,7 +516,7 @@ class SequenceTaggingCNN(nn.Module):
 class SequenceTaggingLSTMCNNCRF(nn.Module):
     def __init__(
         self,
-        input_size: int = 1280,
+        input_size: int = 1536,
         dropout_input: float = 0.25,
         n_filters: int = 32,
         filter_size: int = 3,
@@ -621,46 +577,24 @@ class SequenceTaggingLSTMCNNCRF(nn.Module):
     @staticmethod
     def _esm_embed(sequence:str, device: torch.device, repr_layers: int=33) -> torch.Tensor:
 
+        from esm.models.esm3 import ESM3
+        from esm.sdk.api import ESM3InferenceClient, ESMProtein, GenerationConfig
 
-        from esm import pretrained
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
-        batch_converter = esm_alphabet.get_batch_converter()
-        esm_model.to(device)
+        model: ESM3InferenceClient = ESM3.from_pretrained("esm3_sm_open_v1").to(device)
+        model.eval()
 
+        protein = ESMProtein(sequence=sequence)
 
-        data = [
-            ("protein1", sequence),
-        ]
-        labels, strs, toks = batch_converter(data)
-
-        repr_layers_list = [
-            (i + esm_model.num_layers + 1) % (esm_model.num_layers + 1) for i in range(repr_layers)
-        ]
-
-        out = None
-
-        toks = toks.to(device)
-
-        minibatch_max_length = toks.size(1)
-
-        tokens_list = []
-        end = 0
-        while end <= minibatch_max_length:
-            start = end
-            end = start + 1022
-            if end <= minibatch_max_length:
-                # we are not on the last one, so make this shorter
-                end = end - 300
-            tokens = esm_model(toks[:, start:end], repr_layers=repr_layers_list, return_contacts=False)["representations"][repr_layers - 1]
-            tokens_list.append(tokens)
-
-        out = torch.cat(tokens_list, dim=1).cpu()
-
-        # set nan to zeros
-        out[out!=out] = 0.0
-
-        res = out.transpose(0,1)[1:-1] 
-        seq_embedding = res[:,0]
+        with torch.no_grad():
+            output = model.forward_and_sample(protein, GenerationConfig(track="sequence", num_steps=1))
+            # Output hidden_states usually includes bos and eos tokens, but ESM-1b/2 typically stripped them.
+            # ESM3 structure: output.hidden_states is (1, seq_len+2, 1536) ?
+            # We'll extract and strip bos/eos.
+            # Note: ESMProtein automatically adds BOS/EOS if the tokenization does so.
+            # ESM3 tokenizer: <cls> ... <eos>. So we slice [1:-1]
+            seq_embedding = output.hidden_states[0, 1:-1, :]
+            # force to float32 for MacOS / MPS compatibility
+            seq_embedding = seq_embedding.to(torch.float32).cpu()
 
         return seq_embedding
 

@@ -143,46 +143,20 @@ class CRFBaseModel(nn.Module):
     @staticmethod
     def _esm_embed(sequence:str, device: torch.device, repr_layers: int=33) -> torch.Tensor:
 
+        from esm.models.esm3 import ESM3
+        from esm.sdk.api import ESM3InferenceClient, ESMProtein, GenerationConfig
 
-        from esm import pretrained
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
-        batch_converter = esm_alphabet.get_batch_converter()
-        esm_model.to(device)
+        model: ESM3InferenceClient = ESM3.from_pretrained("esm3_sm_open_v1").to(device)
+        model.eval()
 
+        protein = ESMProtein(sequence=sequence)
 
-        data = [
-            ("protein1", sequence),
-        ]
-        labels, strs, toks = batch_converter(data)
+        with torch.no_grad():
+            output = model.forward_and_sample(protein, GenerationConfig(track="sequence", num_steps=1))
 
-        repr_layers_list = [
-            (i + esm_model.num_layers + 1) % (esm_model.num_layers + 1) for i in range(repr_layers)
-        ]
-
-        out = None
-
-        toks = toks.to(device)
-
-        minibatch_max_length = toks.size(1)
-
-        tokens_list = []
-        end = 0
-        while end <= minibatch_max_length:
-            start = end
-            end = start + 1022
-            if end <= minibatch_max_length:
-                # we are not on the last one, so make this shorter
-                end = end - 300
-            tokens = esm_model(toks[:, start:end], repr_layers=repr_layers_list, return_contacts=False)["representations"][repr_layers - 1]
-            tokens_list.append(tokens)
-
-        out = torch.cat(tokens_list, dim=1).cpu()
-
-        # set nan to zeros
-        out[out!=out] = 0.0
-
-        res = out.transpose(0,1)[1:-1] 
-        seq_embedding = res[:,0]
+            seq_embedding = output.hidden_states[0, 1:-1, :]
+            # force to float32 for MacOS / MPS compatibility
+            seq_embedding = seq_embedding.to(torch.float32).cpu()
 
         return seq_embedding
 
@@ -249,7 +223,7 @@ class LSTMCNNCRF(CRFBaseModel):
     '''LSTM-CNN feature extractor + multistate CRF.'''
     def __init__(
         self,
-        input_size: int = 1280,
+        input_size: int = 1536,
         dropout_input: float = 0.25,
         n_filters: int = 64,
         filter_size: int =3,
@@ -276,7 +250,7 @@ class SimpleLSTMCNNCRF(CRFBaseModel):
     '''LSTM-CNN feature extractor with simple 2-state CRF model.'''
     def __init__(
         self,
-        input_size: int = 1280,
+        input_size: int = 1536,
         dropout_input: float = 0.25,
         n_filters: int = 64,
         filter_size: int =3,
@@ -321,7 +295,7 @@ class SimpleLSTMCNNCRF(CRFBaseModel):
 class SelfAttentionFeatureNet(nn.Module):
 
     def __init__(self,
-        input_size: float = 1280,
+        input_size: float = 1536,
         hidden_size: float = 640,
         dropout_input: float = 0.25,
         n_heads: int = 4,
@@ -361,7 +335,7 @@ class SelfAttentionCRF(CRFBaseModel):
     '''Attention feature extractor + multistate CRF.'''
     def __init__(
         self,
-        input_size: int = 1280,
+        input_size: int = 1536,
         hidden_size: int = 128,
         dropout_input: float = 0.25,
         n_heads: int = 4,

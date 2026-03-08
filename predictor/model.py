@@ -12,7 +12,7 @@ from crf import CRF
 
 class LSTMCNN(nn.Module):
 
-    def __init__(self, input_size: int = 1280, dropout_input=0.25, n_filters=32, filter_size=3, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
+    def __init__(self, input_size: int = 1536, dropout_input=0.25, n_filters=32, filter_size=3, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
         '''
         bidirectional LSTM - CNN model to process sequence data. returns output of same length as the input.
         
@@ -234,7 +234,7 @@ class LSTMCNNCRF(CRFBaseModel):
     '''LSTM-CNN feature extractor + multistate CRF.'''
     def __init__(
         self,
-        input_size: int = 1280,
+        input_size: int = 1536,
         dropout_input: float = 0.25,
         n_filters: int = 64,
         filter_size: int =3,
