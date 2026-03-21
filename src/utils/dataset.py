@@ -388,7 +388,7 @@ class PrecomputedCSVForCRFDataset(Dataset):
             # Propeptide Isolation: Mature peptides are passed as [] to force State 0.
             # Propeptides are mapped to States 1-50.
             labels = [peptide_list_to_label_sequence([], len(seq)) for seq in sequences]
-            propeptide_labels = [peptide_list_to_label_sequence(peptides, len(seq), start_state=1, max_len=15) for peptides, seq in zip(propeptide_coordinates, sequences)]
+            propeptide_labels = [peptide_list_to_label_sequence(peptides, len(seq), start_state=1, max_len=50) for peptides, seq in zip(propeptide_coordinates, sequences)]
             self.labels = [x+y for x,y in zip(labels, propeptide_labels)]
             
             self.peptides_only = coordinates
@@ -551,8 +551,8 @@ class PrecomputedCSVForOverlapCRFDataset(Dataset):
 
         # Propeptide Isolation: Mature peptides are passed as [] to force State 0.
         # Propeptides are mapped to States 1-50.
-        label = peptide_list_to_label_sequence([], seq_len, max_len=15)
-        propeptide_label = peptide_list_to_label_sequence(propeptides, seq_len, start_state=1, max_len=15)
+        label = peptide_list_to_label_sequence([], seq_len, max_len=50)
+        propeptide_label = peptide_list_to_label_sequence(propeptides, seq_len, start_state=1, max_len=50)
         label = label + propeptide_label # numpy arrays with no overlap at nonzero positions so we can just add the two.
 
 

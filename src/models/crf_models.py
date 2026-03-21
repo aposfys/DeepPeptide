@@ -30,59 +30,47 @@ class CRFBaseModel(nn.Module):
 
     @staticmethod
     def get_crf_constraints(max_len: int = 60, min_len: int = 5, n_branches: int = 1):
-        '''Build the peptide state space model.
-        Each peptide starts as state 1 and goes through 2, 3.
-        From 3, it can either go to 4 or skip ahead to any other state up to 59.
-        From 59, go to 60. 
-        This enforces a minimum peptide length of 5. Each peptide is forced to end in 60,
-        so this state can learn peptide end properties.
-        '''
+        '''Build the pure propeptide state space model.'''
         allowed_starts = list(range(max_len + 1)) # Architectural Relaxation: Anchor Release
         allowed_ends = [0] + list(range(min_len, max_len + 1))
 
         allowed_state_transitions = []
-        allowed_state_transitions.append((0,0)) # None to None
-        allowed_state_transitions.append((0,1)) # None to Peptide_0
-        allowed_state_transitions.append((max_len,1)) # Peptide_50 to Peptide_0, no need to have 1 AA gap
-        # Multi-Exit: Any state >= min_len can exit to State 0 (Mature)
-        for i in range(min_len, max_len + 1):
+
+        # RULE 1: Mature state
+        allowed_state_transitions.append((0, 0)) # Stay in Mature
+        allowed_state_transitions.append((0, 1)) # Start first Propeptide
+
+        # RULE 2: The Ladder
+        for i in range(1, max_len + 1):
+            # A. Progress: i -> i+1 (if not at the end)
+            if i < max_len:
+                allowed_state_transitions.append((i, i + 1))
+
+            # B. Exit: i -> 0 (Finish propeptide and enter Mature)
             allowed_state_transitions.append((i, 0))
 
-        for i in range(1, max_len): 
-            to_next = (i, i+1)
-            allowed_state_transitions.append(to_next)
+            # C. MULTI-PROPEPTIDE FIX: i -> 1
+            # This allows jumping from the end of one propeptide (e.g. 25)
+            # directly to the start of the next one (1).
+            allowed_state_transitions.append((i, 1))
 
-            if i >min_len-1: #make skip forward connections
-                skip_to_i = (min_len-2,i) #3
-                allowed_state_transitions.append(skip_to_i) 
+        # RULE 3: Overflow Safety
+        allowed_state_transitions.append((max_len, max_len))
 
-        allowed_state_transitions.append((max_len-1,max_len)) # peptide end position -1 to peptide end position
-        allowed_state_transitions.append((max_len, max_len)) # Self-loop to handle peptides longer than max_len
-        # logic of this state space model is that the end state is the same for all peptides, regardless their length.
-
-        # branch 1 + no state: 0-50
-        # branch 2: 51-101
+        # branch 2 logic if still requested by code
         if n_branches == 2:
             start = 1 + max_len
             end = 2*max_len
-
             allowed_starts.append(start)
             allowed_ends.append(end)
             allowed_state_transitions.append((0,start))
             allowed_state_transitions.append((end,start)) 
             allowed_state_transitions.append((end,0))
-
-            # can go directly from end of peptide to start of propeptide and vice versa.
             allowed_state_transitions.append((end,1))
             allowed_state_transitions.append((start-1, start))
-
             for i in range(start, end): 
-                to_next = (i, i+1)
-                allowed_state_transitions.append(to_next)
-
-                if i >min_len-1: #make skip forward connections
-                    skip_to_i = (start+min_len-3, i)#((min_len-2,i))
-                    allowed_state_transitions.append(skip_to_i) 
+                allowed_state_transitions.append((i, i+1))
+            allowed_state_transitions.append((end-1, end-1))
 
         return allowed_state_transitions, allowed_starts, allowed_ends
 
