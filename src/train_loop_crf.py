@@ -13,14 +13,12 @@ from .models import LSTMCNNCRF, SimpleLSTMCNNCRF, SelfAttentionCRF
 from .utils import add_dict_to_writer, PrecomputedCSVForOverlapCRFDataset
 #from .utils.metrics_cleaned import compute_metrics, compute_metrics_with_propeptides
 from .utils.manuscript_metrics import compute_all_metrics
-from torch.optim import Adam
+from torch.optim import AdamW
 import torch
 import numpy as np
 import argparse
 from torch.utils.tensorboard import SummaryWriter
 
-from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-from fairscale.nn.wrap import enable_wrap, wrap
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 global_step = 0
@@ -36,9 +34,9 @@ def get_dataloaders(args: argparse.Namespace, train_partitions: List[int] = [0,1
     print(f'Loaded data. {len(train_set)} train sequences (p.{train_partitions}), {len(valid_set)} validation sequences (p.{valid_partitions}), {len(test_set)} test sequences (p.{test_partitions}).')
 
 
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=False, collate_fn=train_set.collate_fn, num_workers=2)
-    valid_loader = DataLoader(valid_set, batch_size=args.batch_size, collate_fn=valid_set.collate_fn, num_workers=1)
-    test_loader = DataLoader(test_set, batch_size=args.batch_size, collate_fn=valid_set.collate_fn, num_workers=1)
+    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=False, collate_fn=train_set.collate_fn, num_workers=0)
+    valid_loader = DataLoader(valid_set, batch_size=args.batch_size, collate_fn=valid_set.collate_fn, num_workers=0)
+    test_loader = DataLoader(test_set, batch_size=args.batch_size, collate_fn=valid_set.collate_fn, num_workers=0)
 
     return train_loader, valid_loader, test_loader
 
@@ -48,9 +46,9 @@ def get_model(args: argparse.Namespace):
     if args.model == 'lstmcnncrf':
         model = LSTMCNNCRF(
             input_size = args.embedding_dim,
-            num_labels=3 if 'with_propeptides' in args.label_type else 2,
+            num_labels=2,
             dropout_input=args.dropout,
-            num_states= 101 if 'with_propeptides' in args.label_type else 51,
+            num_states= 51,
             n_filters=args.num_filters,
             hidden_size=args.hidden_size,
             filter_size=args.kernel_size, 
@@ -93,32 +91,18 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
     train_loader, valid_loader, test_loader = get_dataloaders(args, train_partitions, valid_partitions, test_partitions)
 
 
-    if not is_initiated:
-        # when we run in nested CV, we need to do this outside of train() to avoid reinitialization errors.
-        url = "tcp://localhost:12355"
-        torch.distributed.init_process_group(backend="nccl", init_method = url, world_size=1, rank=0)
 
 
-    # initialize the model with FSDP wrapper
-    fsdp_params = dict(
-        mixed_precision=False,
-        flatten_parameters=False,
-        state_dict_device=torch.device("cpu"),  # reduce GPU mem usage
-        move_params_to_cpu =True,  # enable cpu offloading
-        move_grads_to_cpu = True,
-    )
+
+
+
 
     model = get_model(args)
-
-    # NOTE FSDP does not support non-trainable weights yet. CRF has some.
-    # https://github.com/pytorch/pytorch/issues/75943
-    model = FSDP(model, **fsdp_params)
-
-
     model.feature_extractor.biLSTM.flatten_parameters()
     # model = get_model(args)
     # model.to(device)
-    optimizer = Adam(model.parameters(), lr = args.lr)
+    model = model.to(device)
+    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     writer = SummaryWriter(args.out_dir)
 
     previous_best = -100000000000
@@ -140,7 +124,7 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
 
         print(f'Epoch {epoch} completed. Validation loss {valid_loss:.2f}')
 
-        stopping_metric = (valid_metrics['f1 peptides'] + valid_metrics['f1 propeptides'])/2#(valid_metrics['F1 +- 3 peptide'] + valid_metrics['F1 +- 3 propeptide'])/2
+        stopping_metric = valid_metrics['f1 propeptides']
         if stopping_metric > previous_best:
             previous_best = stopping_metric
             best_val_metrics = valid_metrics
@@ -193,16 +177,16 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
 
     for idx, batch in enumerate(loader):
         
-        model.zero_grad()
+        optimizer.zero_grad()
 
         embeddings, mask, label, peptides= batch
         embeddings = embeddings.to(device)
         mask = mask.to(device)
-        label = label.to(device)
+        label = label.long().to(device)
 
         if do_train:
             pos_probs, pos_preds, loss = model(embeddings, mask, label, skip_marginals=True)
-            torch.nn.utils.clip_grad_norm_(model.parameters(),0.25 )
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
             loss.backward()
             optimizer.step()
             writer.add_scalar('Train/loss', loss.item(), global_step=global_step)
@@ -234,22 +218,23 @@ def parse_arguments():
     p.add_argument('--data_file', '-df', type=str, help='Sequences with Graph-Part headers', default = 'data/uniprot_12052022_cv_5_50/labeled_sequences.csv')
     p.add_argument('--partitioning_file', '-pf', type=str, help='Graph-Part output. Assume train-val-test split.', default = 'data/uniprot_12052022_cv_5_50/graphpart_assignments.csv')
     p.add_argument('--embedding', '-em', type=str, help='Sequence embedding strategy.', default='precomputed')
-    p.add_argument('--embedding_dim', '-ed', type=int, help='Sequence embedding dimension.', default=1280)
+    p.add_argument('--embedding_dim', '-ed', type=int, help='Sequence embedding dimension.', default=1536)
 
     p.add_argument('--model', '-m', type=str, default='lstmcnncrf')
 
     p.add_argument('--out_dir', '-od', type=str, help='name that will be added to the runs folder output', default='train_run')
-    p.add_argument('--epochs', type=int, default=30, help='number of times to iterate through all samples')
-    p.add_argument('--batch_size', '-bs', type=int, default=100, help='samples that will be processed in parallel')
+    p.add_argument('--epochs', type=int, default=150, help='number of times to iterate through all samples')
+    p.add_argument('--batch_size', '-bs', type=int, default=16, help='samples that will be processed in parallel')
 
-    p.add_argument('--lr', type=float, default=1e-4)
+    p.add_argument('--lr', type=float, default=1e-5)
+    p.add_argument('--weight_decay', type=float, default=1e-2)
     p.add_argument('--dropout', type=float, default=0.1)
     p.add_argument('--conv_dropout', type=float, default=0.1)
     p.add_argument('--kernel_size', type=int, default=3)
     p.add_argument('--num_filters', type=int, default=32)
     p.add_argument('--hidden_size', type=int, default=64)
 
-    p.add_argument('--label_type', type=str, default='multistate_with_propeptides')
+    p.add_argument('--label_type', type=str, default='propeptides_only')
 
     args = p.parse_args()
 

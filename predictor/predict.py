@@ -32,6 +32,28 @@ MODEL_LIST_ESM1B = [
     'checkpoints_esm1b/4/2/model.pt',
     'checkpoints_esm1b/4/3/model.pt',
 ]
+MODEL_LIST_ESM3 = [
+    'checkpoints_esm3/0/1/model.pt',
+    'checkpoints_esm3/0/2/model.pt',
+    'checkpoints_esm3/0/3/model.pt',
+    'checkpoints_esm3/0/4/model.pt',
+    'checkpoints_esm3/1/0/model.pt',
+    'checkpoints_esm3/1/2/model.pt',
+    'checkpoints_esm3/1/3/model.pt',
+    'checkpoints_esm3/1/4/model.pt',
+    'checkpoints_esm3/2/0/model.pt',
+    'checkpoints_esm3/2/1/model.pt',
+    'checkpoints_esm3/2/3/model.pt',
+    'checkpoints_esm3/2/4/model.pt',
+    'checkpoints_esm3/3/0/model.pt',
+    'checkpoints_esm3/3/1/model.pt',
+    'checkpoints_esm3/3/2/model.pt',
+    'checkpoints_esm3/3/4/model.pt',
+    'checkpoints_esm3/4/0/model.pt',
+    'checkpoints_esm3/4/1/model.pt',
+    'checkpoints_esm3/4/2/model.pt',
+    'checkpoints_esm3/4/3/model.pt',
+]
 MODEL_LIST_ESM2 = [
     'checkpoints_esm2/0/1/model.pt',
     'checkpoints_esm2/0/2/model.pt',
@@ -63,8 +85,8 @@ def main():
     parser.add_argument('--fastafile', '-ff' ,'-fasta', type=str, help='Amino acid sequences to predict in FASTA format.', required=True)
     parser.add_argument('--output_dir', '-od', type=str, help='Path at which to save the output files. Will be created if not existing already.', required=True)
     parser.add_argument('--batch_size', '-bs', type=int, help='Batch size (number of sequences).', default=10)
-    parser.add_argument('--output_fmt', '-of', default='img', const='esm2', nargs='?', choices=['img', 'json'], help='The output format. img also includes the json file.')
-    parser.add_argument('--esm', default='esm2', const='esm2', nargs='?', choices=['esm2', 'esm1b'], help ='Which ESM version to use.')
+    parser.add_argument('--output_fmt', '-of', default='img', const='esm3', nargs='?', choices=['img', 'json'], help='The output format. img also includes the json file.')
+    parser.add_argument('--esm', default='esm3', const='esm3', nargs='?', choices=['esm3', 'esm2', 'esm1b'], help ='Which ESM version to use.')
     parser.add_argument('--esm_pt', default=None,  help ='Optional path to a ESM .pt checkpoint. If not specified, uses the default loading and caching of the esm package.')
 
 
@@ -88,7 +110,7 @@ def main():
     embedder = utils.ESMEmbedder(args.esm, args.esm_pt)
     #embeddings = torch.rand(len(seqs), 500, 1280 )
     batches = utils.batchify_sequences(seqs, args.batch_size)
-    models = utils.load_models(MODEL_LIST_ESM1B if args.esm == 'esm1b' else MODEL_LIST_ESM2)
+    models = utils.load_models(MODEL_LIST_ESM3 if args.esm in ('esm3', 'esm3_sm_open_v1') else (MODEL_LIST_ESM1B if args.esm == 'esm1b' else MODEL_LIST_ESM2))
     crf = utils.combine_crf(models)
     crf.to(device)
 

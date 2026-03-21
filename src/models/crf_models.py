@@ -37,14 +37,16 @@ class CRFBaseModel(nn.Module):
         This enforces a minimum peptide length of 5. Each peptide is forced to end in 60,
         so this state can learn peptide end properties.
         '''
-        allowed_starts = [0,1]
-        allowed_ends = [0, max_len]
+        allowed_starts = list(range(max_len + 1)) # Architectural Relaxation: Anchor Release
+        allowed_ends = [0] + list(range(min_len, max_len + 1))
 
         allowed_state_transitions = []
         allowed_state_transitions.append((0,0)) # None to None
         allowed_state_transitions.append((0,1)) # None to Peptide_0
         allowed_state_transitions.append((max_len,1)) # Peptide_50 to Peptide_0, no need to have 1 AA gap
-        allowed_state_transitions.append((max_len,0)) # Peptide_50 (peptide end position) to None
+        # Multi-Exit: Any state >= min_len can exit to State 0 (Mature)
+        for i in range(min_len, max_len + 1):
+            allowed_state_transitions.append((i, 0))
 
         for i in range(1, max_len): 
             to_next = (i, i+1)
@@ -55,6 +57,7 @@ class CRFBaseModel(nn.Module):
                 allowed_state_transitions.append(skip_to_i) 
 
         allowed_state_transitions.append((max_len-1,max_len)) # peptide end position -1 to peptide end position
+        allowed_state_transitions.append((max_len, max_len)) # Self-loop to handle peptides longer than max_len
         # logic of this state space model is that the end state is the same for all peptides, regardless their length.
 
         # branch 1 + no state: 0-50
@@ -118,6 +121,14 @@ class CRFBaseModel(nn.Module):
 
         features = self.feature_extractor(embeddings, mask) # (batch_size, seq_len, feature_dim)
         emissions = self.features_to_emissions(features) # (batch_size, seq_len, num_labels)
+
+        # Inverted Class Weighting: Bias State 1 (Propeptide) to penalize false negatives.
+        # Since most of the protein is Mature, the model ignored the propeptide signal entirely
+        # and predicted 0-99 heuristically. Boosting State 1 logits makes missing a propeptide expensive.
+        propeptide_bias = 0.0
+        if emissions.shape[-1] >= 2:
+            emissions[:, :, 1] = emissions[:, :, 1] + propeptide_bias
+
         emissions = self._repeat_emissions(emissions) # (batch_size, seq_len, num_states)
         
         # viterbi_paths = self.crf.decode(emissions=emissions, mask = mask.byte())
@@ -143,46 +154,33 @@ class CRFBaseModel(nn.Module):
     @staticmethod
     def _esm_embed(sequence:str, device: torch.device, repr_layers: int=33) -> torch.Tensor:
 
+        from esm.models.esm3 import ESM3
+        from esm.sdk.api import ESM3InferenceClient, ESMProtein, GenerationConfig
 
-        from esm import pretrained
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
-        batch_converter = esm_alphabet.get_batch_converter()
-        esm_model.to(device)
+        model: ESM3InferenceClient = ESM3.from_pretrained("esm3_sm_open_v1").to(device)
+        model.eval()
 
+        protein = ESMProtein(sequence=sequence)
 
-        data = [
-            ("protein1", sequence),
-        ]
-        labels, strs, toks = batch_converter(data)
+        with torch.no_grad():
+            # ESM3 encoding and inference
+            from esm.sdk.api import LogitsConfig
 
-        repr_layers_list = [
-            (i + esm_model.num_layers + 1) % (esm_model.num_layers + 1) for i in range(repr_layers)
-        ]
+            output = model.logits(
+                protein,
+                LogitsConfig(sequence=True, return_embeddings=True)
+            )
 
-        out = None
+            # Access the aligned embeddings and cast to float32 for MacOS / MPS compatibility
+            seq_embedding = output.embeddings
+            if seq_embedding.dim() == 3:
+                seq_embedding = seq_embedding.squeeze(0)
 
-        toks = toks.to(device)
+            # Slice BOS/EOS tokens to align perfectly with the generator's saved `.pt` shape
+            if seq_embedding.shape[0] == len(sequence) + 2:
+                seq_embedding = seq_embedding[1:-1, :]
 
-        minibatch_max_length = toks.size(1)
-
-        tokens_list = []
-        end = 0
-        while end <= minibatch_max_length:
-            start = end
-            end = start + 1022
-            if end <= minibatch_max_length:
-                # we are not on the last one, so make this shorter
-                end = end - 300
-            tokens = esm_model(toks[:, start:end], repr_layers=repr_layers_list, return_contacts=False)["representations"][repr_layers - 1]
-            tokens_list.append(tokens)
-
-        out = torch.cat(tokens_list, dim=1).cpu()
-
-        # set nan to zeros
-        out[out!=out] = 0.0
-
-        res = out.transpose(0,1)[1:-1] 
-        seq_embedding = res[:,0]
+            seq_embedding = seq_embedding.to(torch.float32).cpu()
 
         return seq_embedding
 
@@ -249,7 +247,7 @@ class LSTMCNNCRF(CRFBaseModel):
     '''LSTM-CNN feature extractor + multistate CRF.'''
     def __init__(
         self,
-        input_size: int = 1280,
+        input_size: int = 1536,
         dropout_input: float = 0.25,
         n_filters: int = 64,
         filter_size: int =3,
@@ -276,7 +274,7 @@ class SimpleLSTMCNNCRF(CRFBaseModel):
     '''LSTM-CNN feature extractor with simple 2-state CRF model.'''
     def __init__(
         self,
-        input_size: int = 1280,
+        input_size: int = 1536,
         dropout_input: float = 0.25,
         n_filters: int = 64,
         filter_size: int =3,
@@ -321,7 +319,7 @@ class SimpleLSTMCNNCRF(CRFBaseModel):
 class SelfAttentionFeatureNet(nn.Module):
 
     def __init__(self,
-        input_size: float = 1280,
+        input_size: float = 1536,
         hidden_size: float = 640,
         dropout_input: float = 0.25,
         n_heads: int = 4,
@@ -361,7 +359,7 @@ class SelfAttentionCRF(CRFBaseModel):
     '''Attention feature extractor + multistate CRF.'''
     def __init__(
         self,
-        input_size: int = 1280,
+        input_size: int = 1536,
         hidden_size: int = 128,
         dropout_input: float = 0.25,
         n_heads: int = 4,

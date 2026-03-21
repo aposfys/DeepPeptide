@@ -1,10 +1,29 @@
 import torch
 import torch.nn as nn
 
+import math
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, max_len: int = 5000):
+        super().__init__()
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(1, max_len, d_model)
+        pe[0, :, 0::2] = torch.sin(position * div_term)
+        pe[0, :, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Arguments:
+            x: Tensor, shape ``[batch_size, seq_len, embedding_dim]``
+        """
+        return x + self.pe[:, :x.size(1), :]
+
 
 class LSTMCNN(nn.Module):
 
-    def __init__(self, input_size: int = 1280, dropout_input=0.25, n_filters=32, filter_size=3, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
+    def __init__(self, input_size: int = 1536, dropout_input=0.25, n_filters=32, filter_size=3, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
         '''
         bidirectional LSTM - CNN model to process sequence data. returns output of same length as the input.
         
@@ -18,10 +37,13 @@ class LSTMCNN(nn.Module):
         self.ReLU = nn.ReLU()
 
 
-        self.input_dropout = nn.Dropout2d(p=dropout_input)  # keep_prob=0.75 
-        self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=n_filters,
+        self.pos_encoder = PositionalEncoding(input_size)
+        self.layer_norm = nn.LayerNorm(input_size)
+        self.projector = nn.Linear(input_size, 256)
+        self.input_dropout = nn.Dropout1d(p=dropout_input)  # keep_prob=0.75
+        self.conv1 = nn.Conv1d(in_channels=256, out_channels=n_filters,
                             kernel_size=filter_size, stride=1, padding=filter_size // 2) 
-        self.conv1_dropout = nn.Dropout2d(p=dropout_conv1)  # keep_prob=0.85  # could this dropout be added directly to LSTM
+        self.conv1_dropout = nn.Dropout1d(p=dropout_conv1)  # keep_prob=0.85  # could this dropout be added directly to LSTM
 
         self.biLSTM = nn.LSTM(input_size=n_filters, hidden_size=hidden_size, num_layers=num_lstm_layers,
                             bias=True, batch_first=True, dropout=0.0, bidirectional=True)
@@ -44,6 +66,18 @@ class LSTMCNN(nn.Module):
         '''
         out = embeddings # [batch_size, embeddings_dim, sequence_length]
         seq_lengths = mask.sum(dim=1)
+        # Apply Feature Normalization to stabilize 1536d ESM3 variance
+        out = out.transpose(1, 2) # [B, L, D]
+        out = self.layer_norm(out)
+
+        # Add Positional Encodings
+        out = self.pos_encoder(out)
+
+        # Compress 1536 -> 256 via Linear Bottleneck
+        out = self.projector(out)
+
+        out = out.transpose(1, 2) # [B, D, L]
+
         out = self.input_dropout(out)  # 2D feature map dropout
 
         out = self.ReLU(self.conv1(out))  # [batch_size,embeddings_dim,sequence_length] -> [batch_size,32,sequence_length]
@@ -88,7 +122,7 @@ class LSTMCNN(nn.Module):
 class SequenceTaggingLSTMCNN(nn.Module):
     def __init__(
         self,
-        input_size: int = 1280,
+        input_size: int = 1536,
         dropout_input: float = 0.25,
         n_filters: int = 32,
         filter_size: int = 3,
@@ -157,46 +191,33 @@ class SequenceTaggingLSTMCNN(nn.Module):
     @staticmethod
     def _esm_embed(sequence:str, device: torch.device, repr_layers: int=33) -> torch.Tensor:
 
+        from esm.models.esm3 import ESM3
+        from esm.sdk.api import ESM3InferenceClient, ESMProtein, GenerationConfig
 
-        from esm import pretrained
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
-        batch_converter = esm_alphabet.get_batch_converter()
-        esm_model.to(device)
+        model: ESM3InferenceClient = ESM3.from_pretrained("esm3_sm_open_v1").to(device)
+        model.eval()
 
+        protein = ESMProtein(sequence=sequence)
 
-        data = [
-            ("protein1", sequence),
-        ]
-        labels, strs, toks = batch_converter(data)
+        with torch.no_grad():
+            # ESM3 encoding and inference
+            from esm.sdk.api import LogitsConfig
 
-        repr_layers_list = [
-            (i + esm_model.num_layers + 1) % (esm_model.num_layers + 1) for i in range(repr_layers)
-        ]
+            output = model.logits(
+                protein,
+                LogitsConfig(sequence=True, return_embeddings=True)
+            )
 
-        out = None
+            # Access the aligned embeddings and cast to float32 for MacOS / MPS compatibility
+            seq_embedding = output.embeddings
+            if seq_embedding.dim() == 3:
+                seq_embedding = seq_embedding.squeeze(0)
 
-        toks = toks.to(device)
+            # Slice BOS/EOS tokens to align perfectly with the generator's saved `.pt` shape
+            if seq_embedding.shape[0] == len(sequence) + 2:
+                seq_embedding = seq_embedding[1:-1, :]
 
-        minibatch_max_length = toks.size(1)
-
-        tokens_list = []
-        end = 0
-        while end <= minibatch_max_length:
-            start = end
-            end = start + 1022
-            if end <= minibatch_max_length:
-                # we are not on the last one, so make this shorter
-                end = end - 300
-            tokens = esm_model(toks[:, start:end], repr_layers=repr_layers_list, return_contacts=False)["representations"][repr_layers - 1]
-            tokens_list.append(tokens)
-
-        out = torch.cat(tokens_list, dim=1).cpu()
-
-        # set nan to zeros
-        out[out!=out] = 0.0
-
-        res = out.transpose(0,1)[1:-1] 
-        seq_embedding = res[:,0]
+            seq_embedding = seq_embedding.to(torch.float32).cpu()
 
         return seq_embedding
 
@@ -216,7 +237,7 @@ class SequenceTaggingLSTMCNN(nn.Module):
 
 
 class LSTM(nn.Module):
-    def __init__(self, input_size: int = 1280, dropout_input=0.25, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
+    def __init__(self, input_size: int = 1536, dropout_input=0.25, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
         
         super().__init__()
 
@@ -226,7 +247,8 @@ class LSTM(nn.Module):
         self.ReLU = nn.ReLU()
 
 
-        self.input_dropout = nn.Dropout2d(p=dropout_input)  # keep_prob=0.75
+        self.layer_norm = nn.LayerNorm(input_size)
+        self.input_dropout = nn.Dropout1d(p=dropout_input)  # keep_prob=0.75
 
         self.biLSTM = nn.LSTM(input_size=input_size, hidden_size=hidden_size, num_layers=num_lstm_layers,
                             bias=True, batch_first=True, dropout=0.0, bidirectional=True)
@@ -249,6 +271,18 @@ class LSTM(nn.Module):
         '''
         out = embeddings # [batch_size, embeddings_dim, sequence_length]
         seq_lengths = mask.sum(dim=1)
+        # Apply Feature Normalization to stabilize 1536d ESM3 variance
+        out = out.transpose(1, 2) # [B, L, D]
+        out = self.layer_norm(out)
+
+        # Add Positional Encodings
+        out = self.pos_encoder(out)
+
+        # Compress 1536 -> 256 via Linear Bottleneck
+        out = self.projector(out)
+
+        out = out.transpose(1, 2) # [B, D, L]
+
         out = self.input_dropout(out)  # 2D feature map dropout
 
         bilstminput = out.permute(0, 2, 1).float()  # changing []
@@ -282,7 +316,7 @@ class LSTM(nn.Module):
 
 class CNN(nn.Module):
 
-    def __init__(self, input_size: int = 1280, dropout_input=0.25, n_filters=32, filter_size=3, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
+    def __init__(self, input_size: int = 1536, dropout_input=0.25, n_filters=32, filter_size=3, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
         '''
         bidirectional LSTM - CNN model to process sequence data. returns output of same length as the input.
         
@@ -296,10 +330,11 @@ class CNN(nn.Module):
         self.ReLU = nn.ReLU()
 
 
-        self.input_dropout = nn.Dropout2d(p=dropout_input)  # keep_prob=0.75
+        self.layer_norm = nn.LayerNorm(input_size)
+        self.input_dropout = nn.Dropout1d(p=dropout_input)  # keep_prob=0.75
         self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=n_filters,
                             kernel_size=filter_size, stride=1, padding=filter_size // 2)  # in:20, out=32
-        self.conv1_dropout = nn.Dropout2d(p=dropout_conv1)  # keep_prob=0.85  # could this dropout be added directly to LSTM
+        self.conv1_dropout = nn.Dropout1d(p=dropout_conv1)  # keep_prob=0.85  # could this dropout be added directly to LSTM
 
         # self.biLSTM = nn.LSTM(input_size=n_filters, hidden_size=hidden_size, num_layers=num_lstm_layers,
         #                     bias=True, batch_first=True, dropout=0.0, bidirectional=True)
@@ -322,6 +357,18 @@ class CNN(nn.Module):
         '''
         out = embeddings # [batch_size, embeddings_dim, sequence_length]
         seq_lengths = mask.sum(dim=1)
+        # Apply Feature Normalization to stabilize 1536d ESM3 variance
+        out = out.transpose(1, 2) # [B, L, D]
+        out = self.layer_norm(out)
+
+        # Add Positional Encodings
+        out = self.pos_encoder(out)
+
+        # Compress 1536 -> 256 via Linear Bottleneck
+        out = self.projector(out)
+
+        out = out.transpose(1, 2) # [B, D, L]
+
         out = self.input_dropout(out)  # 2D feature map dropout
 
         out = self.ReLU(self.conv1(out))  # [batch_size,embeddings_dim,sequence_length] -> [batch_size,32,sequence_length]
@@ -366,7 +413,7 @@ class CNN(nn.Module):
 class SequenceTaggingLSTM(nn.Module):
     def __init__(
         self,
-        input_size: int = 1280,
+        input_size: int = 1536,
         dropout_input: float = 0.25,
         hidden_size: int = 64,
         classifier_hidden_size: int = 64,
@@ -430,46 +477,33 @@ class SequenceTaggingLSTM(nn.Module):
     @staticmethod
     def _esm_embed(sequence:str, device: torch.device, repr_layers: int=33) -> torch.Tensor:
 
+        from esm.models.esm3 import ESM3
+        from esm.sdk.api import ESM3InferenceClient, ESMProtein, GenerationConfig
 
-        from esm import pretrained
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
-        batch_converter = esm_alphabet.get_batch_converter()
-        esm_model.to(device)
+        model: ESM3InferenceClient = ESM3.from_pretrained("esm3_sm_open_v1").to(device)
+        model.eval()
 
+        protein = ESMProtein(sequence=sequence)
 
-        data = [
-            ("protein1", sequence),
-        ]
-        labels, strs, toks = batch_converter(data)
+        with torch.no_grad():
+            # ESM3 encoding and inference
+            from esm.sdk.api import LogitsConfig
 
-        repr_layers_list = [
-            (i + esm_model.num_layers + 1) % (esm_model.num_layers + 1) for i in range(repr_layers)
-        ]
+            output = model.logits(
+                protein,
+                LogitsConfig(sequence=True, return_embeddings=True)
+            )
 
-        out = None
+            # Access the aligned embeddings and cast to float32 for MacOS / MPS compatibility
+            seq_embedding = output.embeddings
+            if seq_embedding.dim() == 3:
+                seq_embedding = seq_embedding.squeeze(0)
 
-        toks = toks.to(device)
+            # Slice BOS/EOS tokens to align perfectly with the generator's saved `.pt` shape
+            if seq_embedding.shape[0] == len(sequence) + 2:
+                seq_embedding = seq_embedding[1:-1, :]
 
-        minibatch_max_length = toks.size(1)
-
-        tokens_list = []
-        end = 0
-        while end <= minibatch_max_length:
-            start = end
-            end = start + 1022
-            if end <= minibatch_max_length:
-                # we are not on the last one, so make this shorter
-                end = end - 300
-            tokens = esm_model(toks[:, start:end], repr_layers=repr_layers_list, return_contacts=False)["representations"][repr_layers - 1]
-            tokens_list.append(tokens)
-
-        out = torch.cat(tokens_list, dim=1).cpu()
-
-        # set nan to zeros
-        out[out!=out] = 0.0
-
-        res = out.transpose(0,1)[1:-1] 
-        seq_embedding = res[:,0]
+            seq_embedding = seq_embedding.to(torch.float32).cpu()
 
         return seq_embedding
 
@@ -491,7 +525,7 @@ class SequenceTaggingLSTM(nn.Module):
 class SequenceTaggingCNN(nn.Module):
     def __init__(
         self,
-        input_size: int = 1280,
+        input_size: int = 1536,
         dropout_input: float = 0.25,
         n_filters: int = 32,
         filter_size: int = 3,
@@ -560,7 +594,7 @@ class SequenceTaggingCNN(nn.Module):
 class SequenceTaggingLSTMCNNCRF(nn.Module):
     def __init__(
         self,
-        input_size: int = 1280,
+        input_size: int = 1536,
         dropout_input: float = 0.25,
         n_filters: int = 32,
         filter_size: int = 3,
@@ -601,6 +635,11 @@ class SequenceTaggingLSTMCNNCRF(nn.Module):
 
         logits = self.classifier(features)
 
+        # Inverted Class Weighting: Bias State 1 (Propeptide) to penalize false negatives.
+        propeptide_bias = 0.0
+        if logits.shape[-1] >= 2:
+            logits[:, :, 1] = logits[:, :, 1] + propeptide_bias
+
         viterbi_paths = self.crf.decode(emissions=logits, mask = mask.byte())
         #pad the viterbi paths
         max_pad_len = max([len(x) for x in viterbi_paths])
@@ -621,46 +660,33 @@ class SequenceTaggingLSTMCNNCRF(nn.Module):
     @staticmethod
     def _esm_embed(sequence:str, device: torch.device, repr_layers: int=33) -> torch.Tensor:
 
+        from esm.models.esm3 import ESM3
+        from esm.sdk.api import ESM3InferenceClient, ESMProtein, GenerationConfig
 
-        from esm import pretrained
-        esm_model, esm_alphabet = pretrained.load_model_and_alphabet('esm1b_t33_650M_UR50S')
-        batch_converter = esm_alphabet.get_batch_converter()
-        esm_model.to(device)
+        model: ESM3InferenceClient = ESM3.from_pretrained("esm3_sm_open_v1").to(device)
+        model.eval()
 
+        protein = ESMProtein(sequence=sequence)
 
-        data = [
-            ("protein1", sequence),
-        ]
-        labels, strs, toks = batch_converter(data)
+        with torch.no_grad():
+            # ESM3 encoding and inference
+            from esm.sdk.api import LogitsConfig
 
-        repr_layers_list = [
-            (i + esm_model.num_layers + 1) % (esm_model.num_layers + 1) for i in range(repr_layers)
-        ]
+            output = model.logits(
+                protein,
+                LogitsConfig(sequence=True, return_embeddings=True)
+            )
 
-        out = None
+            # Access the aligned embeddings and cast to float32 for MacOS / MPS compatibility
+            seq_embedding = output.embeddings
+            if seq_embedding.dim() == 3:
+                seq_embedding = seq_embedding.squeeze(0)
 
-        toks = toks.to(device)
+            # Slice BOS/EOS tokens to align perfectly with the generator's saved `.pt` shape
+            if seq_embedding.shape[0] == len(sequence) + 2:
+                seq_embedding = seq_embedding[1:-1, :]
 
-        minibatch_max_length = toks.size(1)
-
-        tokens_list = []
-        end = 0
-        while end <= minibatch_max_length:
-            start = end
-            end = start + 1022
-            if end <= minibatch_max_length:
-                # we are not on the last one, so make this shorter
-                end = end - 300
-            tokens = esm_model(toks[:, start:end], repr_layers=repr_layers_list, return_contacts=False)["representations"][repr_layers - 1]
-            tokens_list.append(tokens)
-
-        out = torch.cat(tokens_list, dim=1).cpu()
-
-        # set nan to zeros
-        out[out!=out] = 0.0
-
-        res = out.transpose(0,1)[1:-1] 
-        seq_embedding = res[:,0]
+            seq_embedding = seq_embedding.to(torch.float32).cpu()
 
         return seq_embedding
 

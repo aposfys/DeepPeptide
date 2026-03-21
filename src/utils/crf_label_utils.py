@@ -73,13 +73,13 @@ def peptide_list_to_label_sequence(peptides: List[Tuple[int,int]], protein_lengt
     for start, end in peptides:
         peptide_length = end - start + 1 #upper bound is inclusive.
 
-        peptide_label = np.concatenate(
-            [ 
-            np.arange(start_state, start_state+min_len-2),#np.arange(1, 4), # from start to first position with skip connections
-            # (end_state -1) - (peptide_length - min_len)
-            np.arange((start_state+max_len-2 - (peptide_length - min_len)), start_state+max_len) #np.arange( 59-(peptide_length-5) ,61) 
-            ]
+        # Forward Ladder Logic: State = (Current Index - Start Index) + 1
+        # Capped at max_len (e.g. 50) to prevent IndexError on long propeptides.
+        peptide_label = np.minimum(
+            np.arange(start_state, start_state + peptide_length),
+            start_state + max_len - 1
         )
+
         # e.g. peptide of len 5 -> 1,2,3,59, 60
         # e.g. peptide of len 11-> 1,2,3,53,54,55,56,57,58,59,60
         label[start-1:end] = peptide_label

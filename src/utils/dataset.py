@@ -10,10 +10,15 @@ from hashlib import md5
 import numpy as np
 
 
+
+
 def make_hashes(names: List[str]) -> List[str]:
     hashes = []
     for name in names:
-        hashes.append(md5(name.encode()).digest().hex())
+        # Robustly strip whitespace and artifacts before hashing to ensure
+        # sequence-to-hash mapping matches the generation scripts exactly.
+        clean_name = name.strip().replace('\n', '').replace(' ', '')
+        hashes.append(md5(clean_name.encode()).digest().hex())
 
     return hashes
 
@@ -120,6 +125,8 @@ class PrecomputedCSVDataset(Dataset):
             embeddings = torch.load(os.path.join(self.embeddings_dir, f'{seq_hash}.pt'))
         except FileNotFoundError:
             raise FileNotFoundError(f'Could not find sequence hash {seq_hash} for {self.names[index]} in {self.embeddings_dir}.')
+
+
         label = self.labels[index]
 
         if self.label_type == 'intensity':
@@ -364,7 +371,7 @@ class PrecomputedCSVForCRFDataset(Dataset):
             self.labels = [peptide_list_to_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
             self.peptides = coordinates
 
-        elif label_type == 'multistate_with_propeptides': # The advanced peptide state grammar.
+        elif label_type == 'propeptides_only': # The advanced peptide state grammar.
 
             # TODO decide how to handle overlap merges that cause peptides longer than max.
             # As it only affects a few we just drop them for now to avoid errors.
@@ -378,9 +385,10 @@ class PrecomputedCSVForCRFDataset(Dataset):
             propeptide_coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in propeptide_coordinate_strings]
             sequences = data['sequence'].tolist()
 
-            labels = [peptide_list_to_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
-            propeptide_labels = [peptide_list_to_label_sequence(peptides, len(seq), start_state=61) for peptides, seq in zip(propeptide_coordinates, sequences)]
-            #self.labels = [peptide_list_to_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
+            # Propeptide Isolation: Mature peptides are passed as [] to force State 0.
+            # Propeptides are mapped to States 1-50.
+            labels = [peptide_list_to_label_sequence([], len(seq)) for seq in sequences]
+            propeptide_labels = [peptide_list_to_label_sequence(peptides, len(seq), start_state=1, max_len=15) for peptides, seq in zip(propeptide_coordinates, sequences)]
             self.labels = [x+y for x,y in zip(labels, propeptide_labels)]
             
             self.peptides_only = coordinates
@@ -416,6 +424,7 @@ class PrecomputedCSVForCRFDataset(Dataset):
         except FileNotFoundError:
             raise FileNotFoundError(f'Could not find sequence hash {seq_hash} for {self.names[index]} in {self.embeddings_dir}.')
         
+
         label = torch.from_numpy(self.labels[index])
         mask = torch.ones(embeddings.shape[0])
         peptides = self.peptides[index]
@@ -536,11 +545,14 @@ class PrecomputedCSVForOverlapCRFDataset(Dataset):
         except FileNotFoundError:
             raise FileNotFoundError(f'Could not find sequence hash {seq_hash} for {self.names[index]} in {self.embeddings_dir}.')
 
+
         peptides, propeptides = self.peptides[index]
         peptides, propeptides = self._sample_from_overlapping_peptides(peptides, propeptides)
 
-        label = peptide_list_to_label_sequence(peptides, seq_len, max_len = 50) 
-        propeptide_label = peptide_list_to_label_sequence(propeptides, seq_len, start_state=51, max_len=50) 
+        # Propeptide Isolation: Mature peptides are passed as [] to force State 0.
+        # Propeptides are mapped to States 1-50.
+        label = peptide_list_to_label_sequence([], seq_len, max_len=15)
+        propeptide_label = peptide_list_to_label_sequence(propeptides, seq_len, start_state=1, max_len=15)
         label = label + propeptide_label # numpy arrays with no overlap at nonzero positions so we can just add the two.
 
 

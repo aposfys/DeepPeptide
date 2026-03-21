@@ -7,12 +7,31 @@ lstm_cnn.py
 
 import torch
 import torch.nn as nn
+
+import math
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, max_len: int = 1500):
+        super().__init__()
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(1, max_len, d_model)
+        pe[0, :, 0::2] = torch.sin(position * div_term)
+        pe[0, :, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Arguments:
+            x: Tensor, shape ``[batch_size, seq_len, embedding_dim]``
+        """
+        return x + self.pe[:, :x.size(1), :]
 from crf import CRF
 
 
 class LSTMCNN(nn.Module):
 
-    def __init__(self, input_size: int = 1280, dropout_input=0.25, n_filters=32, filter_size=3, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
+    def __init__(self, input_size: int = 1536, dropout_input=0.25, n_filters=32, filter_size=3, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
         '''
         bidirectional LSTM - CNN model to process sequence data. returns output of same length as the input.
         
@@ -26,8 +45,11 @@ class LSTMCNN(nn.Module):
         self.ReLU = nn.ReLU()
 
 
-        self.input_dropout = nn.Dropout2d(p=dropout_input)  # keep_prob=0.75
-        self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=n_filters,
+        self.pos_encoder = PositionalEncoding(input_size)
+        self.layer_norm = nn.LayerNorm(input_size)
+        self.projector = nn.Linear(input_size, 256)
+        self.input_dropout = nn.Dropout1d(p=dropout_input)  # keep_prob=0.75
+        self.conv1 = nn.Conv1d(in_channels=256, out_channels=n_filters,
                             kernel_size=filter_size, stride=1, padding=filter_size // 2)  # in:20, out=32
         self.conv1_dropout = nn.Dropout2d(p=dropout_conv1)  # keep_prob=0.85  # could this dropout be added directly to LSTM
 
@@ -52,6 +74,19 @@ class LSTMCNN(nn.Module):
         '''
         out = embeddings # [batch_size, embeddings_dim, sequence_length]
         seq_lengths = mask.sum(dim=1)
+
+        # Apply Feature Normalization to stabilize 1536d ESM3 variance
+        out = out.transpose(1, 2) # [B, L, D]
+        out = self.layer_norm(out)
+
+        # Add Positional Encodings
+        out = self.pos_encoder(out)
+
+        # Compress 1536 -> 256 via Linear Bottleneck
+        out = self.projector(out)
+
+        out = out.transpose(1, 2) # [B, D, L]
+
         out = self.input_dropout(out)  # 2D feature map dropout
 
         out = self.ReLU(self.conv1(out))  # [batch_size,embeddings_dim,sequence_length] -> [batch_size,32,sequence_length]
@@ -120,14 +155,16 @@ class CRFBaseModel(nn.Module):
         This enforces a minimum peptide length of 5. Each peptide is forced to end in 60,
         so this state can learn peptide end properties.
         '''
-        allowed_starts = [0,1]
-        allowed_ends = [0, max_len]
+        allowed_starts = list(range(max_len + 1)) # Architectural Relaxation: Anchor Release
+        allowed_ends = [0] + list(range(min_len, max_len + 1))
 
         allowed_state_transitions = []
         allowed_state_transitions.append((0,0)) # None to None
         allowed_state_transitions.append((0,1)) # None to Peptide_0
         allowed_state_transitions.append((max_len,1)) # Peptide_50 to Peptide_0, no need to have 1 AA gap
-        allowed_state_transitions.append((max_len,0)) # Peptide_50 (peptide end position) to None
+        # Multi-Exit: Any state >= min_len can exit to State 0 (Mature)
+        for i in range(min_len, max_len + 1):
+            allowed_state_transitions.append((i, 0))
 
         for i in range(1, max_len): 
             to_next = (i, i+1)
@@ -138,6 +175,7 @@ class CRFBaseModel(nn.Module):
                 allowed_state_transitions.append(skip_to_i) 
 
         allowed_state_transitions.append((max_len-1,max_len)) # peptide end position -1 to peptide end position
+        allowed_state_transitions.append((max_len, max_len)) # Self-loop to handle peptides longer than max_len
         # logic of this state space model is that the end state is the same for all peptides, regardless their length.
 
         # add a self loop on the pre-last state. Should help avoid issues at inference when longer stuff might show up.
@@ -207,6 +245,12 @@ class CRFBaseModel(nn.Module):
 
         features = self.feature_extractor(embeddings, mask) # (batch_size, seq_len, feature_dim)
         emissions = self.features_to_emissions(features) # (batch_size, seq_len, num_labels)
+
+        # Inverted Class Weighting: Bias State 1 (Propeptide) to penalize false negatives.
+        propeptide_bias = 0.0
+        if emissions.shape[-1] >= 2:
+            emissions[:, :, 1] = emissions[:, :, 1] + propeptide_bias
+
         emissions = self._repeat_emissions(emissions) # (batch_size, seq_len, num_states)
         
         # viterbi_paths = self.crf.decode(emissions=emissions, mask = mask.byte())
@@ -234,7 +278,7 @@ class LSTMCNNCRF(CRFBaseModel):
     '''LSTM-CNN feature extractor + multistate CRF.'''
     def __init__(
         self,
-        input_size: int = 1280,
+        input_size: int = 1536,
         dropout_input: float = 0.25,
         n_filters: int = 64,
         filter_size: int =3,
