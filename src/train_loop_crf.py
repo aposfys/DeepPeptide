@@ -196,8 +196,11 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
                 pos_probs, pos_preds, loss = model(embeddings, mask, label)
 
         true.extend(peptides)
-        probs.append(pos_probs.detach().cpu().numpy())
-        labels.append(label.detach().cpu().numpy())
+        # Extract unpadded sequences to properly align outputs for pickle
+        for i in range(label.shape[0]):
+            seq_len = int(mask[i].sum().item())
+            probs.append(pos_probs[i, :seq_len].detach().cpu().numpy())
+            labels.append(label[i, :seq_len].detach().cpu().numpy())
         preds.extend(pos_preds)
         epoch_loss.append(loss.item())
 
