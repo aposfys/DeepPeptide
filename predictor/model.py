@@ -46,8 +46,15 @@ class LSTMCNN(nn.Module):
 
 
         self.pos_encoder = PositionalEncoding(input_size)
-        self.layer_norm = nn.LayerNorm(input_size)
-        self.projector = nn.Linear(input_size, 256)
+
+        # ESM3 Bottleneck: Linear(1536, 256) -> LayerNorm(256) -> ReLU/Dropout
+        self.bottleneck = nn.Sequential(
+            nn.Linear(input_size, 256),
+            nn.LayerNorm(256),
+            nn.ReLU(),
+            nn.Dropout(p=dropout_input)
+        )
+
         self.input_dropout = nn.Dropout1d(p=dropout_input)  # keep_prob=0.75
         self.conv1 = nn.Conv1d(in_channels=256, out_channels=n_filters,
                             kernel_size=filter_size, stride=1, padding=filter_size // 2)  # in:20, out=32
@@ -75,19 +82,18 @@ class LSTMCNN(nn.Module):
         out = embeddings # [batch_size, embeddings_dim, sequence_length]
         seq_lengths = mask.sum(dim=1)
 
-        # Apply Feature Normalization to stabilize 1536d ESM3 variance
         out = out.transpose(1, 2) # [B, L, D]
-        out = self.layer_norm(out)
 
         # Add Positional Encodings
         out = self.pos_encoder(out)
 
-        # Compress 1536 -> 256 via Linear Bottleneck
-        out = self.projector(out)
+        # Compress 1536 -> 256 via Linear Bottleneck with LayerNorm and Dropout
+        out = self.bottleneck(out)
 
         out = out.transpose(1, 2) # [B, D, L]
 
-        out = self.input_dropout(out)  # 2D feature map dropout
+        # 1D Dropout on the feature maps
+        out = self.input_dropout(out)
 
         out = self.ReLU(self.conv1(out))  # [batch_size,embeddings_dim,sequence_length] -> [batch_size,32,sequence_length]
 
@@ -165,15 +171,17 @@ class CRFBaseModel(nn.Module):
                 allowed_state_transitions.append((i, i + 1))
 
             # B. Exit: i -> 0 (Finish propeptide and enter Mature)
-            allowed_state_transitions.append((i, 0))
+            # Allowed at any state i >= 5 to enforce the Minimum Length constraint of 5 residues.
+            if i >= 5:
+                allowed_state_transitions.append((i, 0))
 
-            # C. MULTI-PROPEPTIDE FIX: i -> 1
-            # This allows jumping from the end of one propeptide (e.g. 25)
-            # directly to the start of the next one (1).
-            allowed_state_transitions.append((i, 1))
-
-        # RULE 3: Overflow Safety
+        # RULE 3: Overflow Safety (Long-Tail Fix)
         allowed_state_transitions.append((max_len, max_len))
+
+        # Ensure max_len -> 0 transition exists explicitly in case loop logic is misconstrued
+        # (Though max_len is hit by `for i in range(1, max_len + 1):`, we guarantee it here)
+        if (max_len, 0) not in allowed_state_transitions:
+            allowed_state_transitions.append((max_len, 0))
 
         # branch 2 logic if still requested by code
         if n_branches == 2:
@@ -211,7 +219,7 @@ class CRFBaseModel(nn.Module):
         if emissions.shape[-1] == 2:
             emissions_out = torch.zeros(emissions.shape[0], emissions.shape[1], self.num_states, dtype=emissions.dtype, device=emissions.device)    
             emissions_out[:,:,0] = emissions[:,:,0]
-            emissions_out[:,:, 1:(self.max_len+1)] = emissions[:,:,1].unsqueeze(-1)
+            emissions_out[:,:, 1:(self.max_len+1)] = emissions[:,:,1].unsqueeze(-1).expand(-1, -1, self.max_len)
         elif emissions.shape[-1] == 3:
             emissions_out = torch.zeros(emissions.shape[0], emissions.shape[1], self.num_states, dtype=emissions.dtype, device=emissions.device)
             emissions_out[:,:,0] = emissions[:,:,0]

@@ -47,15 +47,17 @@ class CRFBaseModel(nn.Module):
                 allowed_state_transitions.append((i, i + 1))
 
             # B. Exit: i -> 0 (Finish propeptide and enter Mature)
-            allowed_state_transitions.append((i, 0))
+            # Allowed at any state i >= 5 to enforce the Minimum Length constraint of 5 residues.
+            if i >= 5:
+                allowed_state_transitions.append((i, 0))
 
-            # C. MULTI-PROPEPTIDE FIX: i -> 1
-            # This allows jumping from the end of one propeptide (e.g. 25)
-            # directly to the start of the next one (1).
-            allowed_state_transitions.append((i, 1))
-
-        # RULE 3: Overflow Safety
+        # RULE 3: Overflow Safety (Long-Tail Fix)
         allowed_state_transitions.append((max_len, max_len))
+
+        # Ensure max_len -> 0 transition exists explicitly in case loop logic is misconstrued
+        # (Though max_len is hit by `for i in range(1, max_len + 1):`, we guarantee it here)
+        if (max_len, 0) not in allowed_state_transitions:
+            allowed_state_transitions.append((max_len, 0))
 
         # branch 2 logic if still requested by code
         if n_branches == 2:
@@ -93,7 +95,7 @@ class CRFBaseModel(nn.Module):
         if emissions.shape[-1] == 2:
             emissions_out = torch.zeros(emissions.shape[0], emissions.shape[1], self.num_states, dtype=emissions.dtype, device=emissions.device)    
             emissions_out[:,:,0] = emissions[:,:,0]
-            emissions_out[:,:, 1:(self.max_len+1)] = emissions[:,:,1].unsqueeze(-1)
+            emissions_out[:,:, 1:(self.max_len+1)] = emissions[:,:,1].unsqueeze(-1).expand(-1, -1, self.max_len)
         elif emissions.shape[-1] == 3:
             emissions_out = torch.zeros(emissions.shape[0], emissions.shape[1], self.num_states, dtype=emissions.dtype, device=emissions.device)
             emissions_out[:,:,0] = emissions[:,:,0]

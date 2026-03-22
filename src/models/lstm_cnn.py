@@ -38,8 +38,15 @@ class LSTMCNN(nn.Module):
 
 
         self.pos_encoder = PositionalEncoding(input_size)
-        self.layer_norm = nn.LayerNorm(input_size)
-        self.projector = nn.Linear(input_size, 256)
+
+        # ESM3 Bottleneck: Linear(1536, 256) -> LayerNorm(256) -> ReLU/Dropout
+        self.bottleneck = nn.Sequential(
+            nn.Linear(input_size, 256),
+            nn.LayerNorm(256),
+            nn.ReLU(),
+            nn.Dropout(p=dropout_input)
+        )
+
         self.input_dropout = nn.Dropout1d(p=dropout_input)  # keep_prob=0.75
         self.conv1 = nn.Conv1d(in_channels=256, out_channels=n_filters,
                             kernel_size=filter_size, stride=1, padding=filter_size // 2) 
@@ -66,19 +73,19 @@ class LSTMCNN(nn.Module):
         '''
         out = embeddings # [batch_size, embeddings_dim, sequence_length]
         seq_lengths = mask.sum(dim=1)
-        # Apply Feature Normalization to stabilize 1536d ESM3 variance
+
         out = out.transpose(1, 2) # [B, L, D]
-        out = self.layer_norm(out)
 
         # Add Positional Encodings
         out = self.pos_encoder(out)
 
-        # Compress 1536 -> 256 via Linear Bottleneck
-        out = self.projector(out)
+        # Compress 1536 -> 256 via Linear Bottleneck with LayerNorm and Dropout
+        out = self.bottleneck(out)
 
         out = out.transpose(1, 2) # [B, D, L]
 
-        out = self.input_dropout(out)  # 2D feature map dropout
+        # 1D Dropout on the feature maps
+        out = self.input_dropout(out)
 
         out = self.ReLU(self.conv1(out))  # [batch_size,embeddings_dim,sequence_length] -> [batch_size,32,sequence_length]
 

@@ -12,34 +12,35 @@ import pickle
 from typing import List, Tuple
 from tqdm.auto import tqdm
 
-PEPTIDE_START_STATE, PEPTIDE_END_STATE = 1, 50
-PROPEPTIDE_START_STATE, PROPEPTIDE_END_STATE = 51, 100
+PEPTIDE_START_STATE, PEPTIDE_END_STATE = -1, -1
+PROPEPTIDE_START_STATE, PROPEPTIDE_END_STATE = 1, 50
 
 def convert_path_to_peptide_borders(pred: List[int], start_state, stop_state, offset: int=0) -> List[Tuple[int,int]]:
     '''
     Given a sequence of states, find the borders of contiguous peptide segments.
     Offset adds a constant to all coordinates (1-based indexing in uniprot)
     '''
+    if start_state == -1 or stop_state == -1:
+        return []
 
     seq_peptides = []
     is_peptide = False
 
     for pos, p in enumerate(pred):
-        
-        if p == start_state and not is_peptide: # open a new peptide
+        # Open peptide at start_state (e.g. state 1)
+        if p == start_state and not is_peptide:
             is_peptide = True
             peptide_start = pos
 
-        # Close the peptide at the position that has the stop state. (can restart peptide immediately without NO-peptide gap.)
-        elif p == stop_state and is_peptide: #close the peptide
-            is_peptide = False
-            seq_peptides.append((peptide_start +offset, pos +offset))
-        else:
-            pass # for positions that are not start_state or stop_state, do nothing.
-
-    # close the last peptide if same as sequence end.
-    if is_peptide:
-        seq_peptides.append((peptide_start +offset,pos +offset))
+        # In the new 51-state transition matrix, any transition from a state >= 5 to 0 or 1
+        # marks the end of a peptide (since we removed explicit stop states in favor of i -> 0).
+        # We can detect the end by checking if we were in a peptide and the NEXT state is 0,
+        # or we just reached the end of the sequence.
+        if is_peptide:
+            next_state = pred[pos+1] if pos + 1 < len(pred) else 0
+            if next_state == 0 or next_state == start_state:
+                is_peptide = False
+                seq_peptides.append((peptide_start + offset, pos + offset))
         
     return seq_peptides
 
@@ -182,6 +183,25 @@ def compute_all_metrics(probs: np.ndarray, preds: np.ndarray, labels: np.ndarray
 
     df = prediction_df.join(true_df[['true_peptides', 'true_propeptides']])
     
+    # Sequence-level (Pixel-wise) accuracy and F1 for propeptides
+    seq_tp, seq_fp, seq_fn, seq_tn = 0, 0, 0, 0
+    for pred, true in zip(preds, labels):
+        # Collapse states 1-50 to 1
+        p = np.array(pred)
+        t = np.array(true)
+        p_binary = (p >= 1) & (p <= 50)
+        t_binary = (t >= 1) & (t <= 50)
+
+        seq_tp += np.logical_and(p_binary, t_binary).sum()
+        seq_fp += np.logical_and(p_binary, ~t_binary).sum()
+        seq_fn += np.logical_and(~p_binary, t_binary).sum()
+        seq_tn += np.logical_and(~p_binary, ~t_binary).sum()
+
+    seq_precision = seq_tp / (seq_tp + seq_fp) if (seq_tp + seq_fp) > 0 else 0
+    seq_recall = seq_tp / (seq_tp + seq_fn) if (seq_tp + seq_fn) > 0 else 0
+    seq_f1 = 2 * seq_precision * seq_recall / (seq_precision + seq_recall) if (seq_precision + seq_recall) > 0 else 0
+    seq_accuracy = (seq_tp + seq_tn) / (seq_tp + seq_tn + seq_fp + seq_fn) if (seq_tp + seq_tn + seq_fp + seq_fn) > 0 else 0
+
     metrics = []
     for tolerance in windows:
         true = df['true_peptides'].tolist()
@@ -204,6 +224,10 @@ def compute_all_metrics(probs: np.ndarray, preds: np.ndarray, labels: np.ndarray
             'precision all': prec_all,
             'recall all': rec_all,
             'f1 all': f1_all,
+            'seq precision': seq_precision,
+            'seq recall': seq_recall,
+            'seq f1': seq_f1,
+            'seq accuracy': seq_accuracy,
         })
     
     return metrics
