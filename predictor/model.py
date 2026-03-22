@@ -175,13 +175,19 @@ class CRFBaseModel(nn.Module):
             if i >= 5:
                 allowed_state_transitions.append((i, 0))
 
+                # C. MULTI-PROPEPTIDE FIX: i -> 1
+                # This allows jumping from the end of one propeptide directly to the start of the next one (1).
+                # Only allowed if the finished propeptide met the minimum length requirement.
+                allowed_state_transitions.append((i, 1))
+
         # RULE 3: Overflow Safety (Long-Tail Fix)
         allowed_state_transitions.append((max_len, max_len))
 
-        # Ensure max_len -> 0 transition exists explicitly in case loop logic is misconstrued
-        # (Though max_len is hit by `for i in range(1, max_len + 1):`, we guarantee it here)
+        # Ensure max_len exits exist explicitly in case loop logic is misconstrued
         if (max_len, 0) not in allowed_state_transitions:
             allowed_state_transitions.append((max_len, 0))
+        if (max_len, 1) not in allowed_state_transitions:
+            allowed_state_transitions.append((max_len, 1))
 
         # branch 2 logic if still requested by code
         if n_branches == 2:

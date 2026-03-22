@@ -332,7 +332,46 @@ class PrecomputedCSVForCRFDataset(Dataset):
 
         # NOTE self.peptides is 1-based indexing straight from UniProt.
 
-        if label_type == 'propeptides_only': # The advanced peptide state grammar.
+        if label_type == 'simple': # The easiest case 0 for no peptide, 1 for peptide.
+            coordinate_strings = data['coordinates'].tolist()
+            coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in coordinate_strings]
+            sequences = data['sequence'].tolist()
+            self.labels = [peptide_list_to_binary_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
+            self.peptides = coordinates
+
+        elif label_type == 'simple_with_propeptides':
+            coordinate_strings = data['coordinates'].tolist()
+            propeptide_coordinate_strings = data['propeptide_coordinates'].tolist()
+            coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in coordinate_strings]
+            propeptide_coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in propeptide_coordinate_strings]
+            sequences = data['sequence'].tolist()
+
+            labels = [peptide_list_to_binary_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
+            propeptide_labels = [peptide_list_to_binary_label_sequence(peptides, len(seq), label_value=2) for peptides, seq in zip(propeptide_coordinates, sequences)]
+
+            # labels are 0-1, propeptide_labels are 0-2. There are no overlaps between their positions.
+            self.labels = [x+y for x,y in zip(labels, propeptide_labels)]
+
+            self.peptides_only = coordinates
+            self.propeptides = propeptide_coordinates
+            self.peptides = [(x,y) for x,y, in zip(coordinates, propeptide_coordinates)] # data loading works exactly the same. only metrics computation needs to unpack this.
+
+
+        elif label_type == 'multistate': # The advanced peptide state grammar.
+
+            # TODO decide how to handle overlap merges that cause peptides longer than max.
+            # As it only affects a few we just drop them for now to avoid errors.
+            data = data.loc[~data.index.isin(['P87352', 'Q91082', 'P10645'])]
+            self.data = data
+            self.names = data.index.tolist()
+
+            coordinate_strings = data['coordinates'].tolist()
+            coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in coordinate_strings]
+            sequences = data['sequence'].tolist()
+            self.labels = [peptide_list_to_label_sequence(peptides, len(seq)) for peptides, seq in zip(coordinates, sequences)]
+            self.peptides = coordinates
+
+        elif label_type == 'propeptides_only': # The advanced peptide state grammar.
 
             # TODO decide how to handle overlap merges that cause peptides longer than max.
             # As it only affects a few we just drop them for now to avoid errors.
@@ -342,8 +381,6 @@ class PrecomputedCSVForCRFDataset(Dataset):
 
             coordinate_strings = data['coordinates'].tolist()
             propeptide_coordinate_strings = data['propeptide_coordinates'].tolist()
-
-            # Extract coordinates for record-keeping/metrics, but DO NOT map them to labels.
             coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in coordinate_strings]
             propeptide_coordinates = [parse_coordinate_string(x, merge_overlaps=True) for x in propeptide_coordinate_strings]
             sequences = data['sequence'].tolist()
@@ -357,7 +394,17 @@ class PrecomputedCSVForCRFDataset(Dataset):
             self.peptides_only = coordinates
             self.propeptides = propeptide_coordinates
             self.peptides = [(x,y) for x,y, in zip(coordinates, propeptide_coordinates)] # data loading works exactly the same. only metrics computation needs to unpack this.
+
+
+
+        elif label_type == 'multilabel':
+            coordinate_strings = data['coordinates'].tolist()
+            coordinates = [parse_coordinate_string(x, merge_overlaps=False) for x in coordinate_strings]
+            sequences = data['sequence'].tolist()
             
+            self.labels = None
+            self.peptides = coordinates
+            raise NotImplementedError('multilabel')
         else:
             raise NotImplementedError(label_type)
 

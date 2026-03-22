@@ -36,8 +36,11 @@ def test_constraints():
 
     assert (50, 50) in transitions, "Missing 50 -> 50 self-loop (Long-Tail fix)"
 
-    # Ensure Multi-Propeptide jump (i -> 1) is excised
-    assert all((i, 1) not in transitions for i in range(1, 51)), "i -> 1 transition still exists"
+    # Ensure Multi-Propeptide jump (i -> 1) is excised for invalid lengths but present for valid
+    assert all((i, 1) not in transitions for i in range(1, 5)), "i -> 1 transition allowed before min_length"
+    assert (5, 1) in transitions, "Missing 5 -> 1 multi-propeptide jump"
+    assert (25, 1) in transitions, "Missing 25 -> 1 multi-propeptide jump"
+    assert (50, 1) in transitions, "Missing 50 -> 1 multi-propeptide jump"
     print("✓ Constraints correct.")
 
 # 3. Test Emission Repeating (2-to-51 mapping)
@@ -90,6 +93,33 @@ def test_dataset_labels():
     assert np.all(final_label[9:20] == 0), "Active peptide leaked into final labels"
     print("✓ Dataset labels correct.")
 
+# 4.5. Test Adjoining Propeptide Labels (The Training Crash Fix)
+def test_adjoining_propeptides():
+    print("Testing Adjoining Propeptides Edge Case...")
+    from src.models.crf_models import CRFBaseModel
+    import torch
+
+    model = CRFBaseModel()
+
+    # Simulating the exact scenario that caused the validation explosion:
+    # A propeptide of length 25 followed immediately by a new propeptide
+    # e.g., 1, 2, ..., 25, 1, 2, ...
+    target = torch.zeros((1, 40), dtype=torch.long)
+    target[0, 0:25] = torch.arange(1, 26) # First propeptide
+    target[0, 25:35] = torch.arange(1, 11) # Adjoining second propeptide
+
+    # Let's run it through _debug_crf to ensure no invalid transitions are found
+    import io
+    from contextlib import redirect_stdout
+    f = io.StringIO()
+    with redirect_stdout(f):
+        model._debug_crf(target)
+
+    output = f.getvalue()
+    assert "Found invalid transition" not in output, f"Adjoining propeptides caused an invalid transition! Log: {output}"
+    print("✓ Adjoining Propeptides logic correct.")
+
+
 # 5. Test Evaluation Metric Collapsing
 from src.utils.manuscript_metrics import compute_all_metrics, convert_path_to_peptide_borders
 def test_evaluation_metrics():
@@ -132,5 +162,6 @@ if __name__ == '__main__':
     test_constraints()
     test_emissions()
     test_dataset_labels()
+    test_adjoining_propeptides()
     test_evaluation_metrics()
     print("--- All tests passed! ---")
