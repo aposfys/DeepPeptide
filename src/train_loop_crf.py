@@ -48,7 +48,7 @@ def get_model(args: argparse.Namespace):
             input_size = args.embedding_dim,
             num_labels=2,
             dropout_input=args.dropout,
-            num_states= 51,
+            num_states= 3,
             n_filters=args.num_filters,
             hidden_size=args.hidden_size,
             filter_size=args.kernel_size, 

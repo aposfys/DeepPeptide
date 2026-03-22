@@ -73,12 +73,10 @@ def peptide_list_to_label_sequence(peptides: List[Tuple[int,int]], protein_lengt
     for start, end in peptides:
         peptide_length = end - start + 1 #upper bound is inclusive.
 
-        # Forward Ladder Logic: State = (Current Index - Start Index) + 1
-        # Capped at max_len (e.g. 50) to prevent IndexError on long propeptides.
-        peptide_label = np.minimum(
-            np.arange(start_state, start_state + peptide_length),
-            start_state + max_len - 1
-        )
+        # B-I-O Label Logic
+        # First residue is State 1 (Beginning), remainder are State 2 (Inside)
+        peptide_label = np.full(peptide_length, start_state + 1)
+        peptide_label[0] = start_state
 
         # e.g. peptide of len 5 -> 1,2,3,59, 60
         # e.g. peptide of len 11-> 1,2,3,53,54,55,56,57,58,59,60

@@ -147,48 +147,30 @@ class CRFBaseModel(nn.Module):
         self.crf = CRF(num_states, batch_first=True, allowed_transitions=allowed_transitions, allowed_start=allowed_start, allowed_end=allowed_end)
 
     @staticmethod
-    def get_crf_constraints(max_len: int = 60, min_len: int = 5, n_branches: int = 1):
-        '''Build the pure propeptide state space model.'''
-        allowed_starts = list(range(max_len + 1)) # Architectural Relaxation: Anchor Release
-        allowed_ends = [0] + list(range(min_len, max_len + 1))
+    def get_crf_constraints(max_len: int = 2, min_len: int = 1, n_branches: int = 1):
+        '''Build the pure BIO (Beginning, Inside, Outside) propeptide state space model.'''
+        # State 0: Outside (Mature / Background)
+        # State 1: Beginning (First residue of Propeptide)
+        # State 2: Inside (Body of Propeptide)
+
+        allowed_starts = [0, 1]
+        allowed_ends = [0, 1, 2]
 
         allowed_state_transitions = []
 
         # RULE 1: Mature state
         allowed_state_transitions.append((0, 0)) # Stay in Mature
-        allowed_state_transitions.append((0, 1)) # Start first Propeptide
+        allowed_state_transitions.append((0, 1)) # Start Propeptide
 
-        # RULE 2: The Ladder
-        for i in range(1, max_len + 1):
-            # A. Progress: i -> i+1 (if not at the end)
-            if i < max_len:
-                allowed_state_transitions.append((i, i + 1))
+        # RULE 2: Beginning state
+        allowed_state_transitions.append((1, 2)) # Progress to Body
+        allowed_state_transitions.append((1, 0)) # Exit (1-residue propeptide)
+        allowed_state_transitions.append((1, 1)) # Tandem 1-residue propeptides
 
-            # B. Exit: i -> 0 (Finish propeptide and enter Mature)
-            allowed_state_transitions.append((i, 0))
-
-            # C. MULTI-PROPEPTIDE FIX: i -> 1
-            # This allows jumping from the end of one propeptide (e.g. 25)
-            # directly to the start of the next one (1).
-            allowed_state_transitions.append((i, 1))
-
-        # RULE 3: Overflow Safety
-        allowed_state_transitions.append((max_len, max_len))
-
-        # branch 2 logic if still requested by code
-        if n_branches == 2:
-            start = 1 + max_len
-            end = 2*max_len
-            allowed_starts.append(start)
-            allowed_ends.append(end)
-            allowed_state_transitions.append((0,start))
-            allowed_state_transitions.append((end,start)) 
-            allowed_state_transitions.append((end,0))
-            allowed_state_transitions.append((end,1))
-            allowed_state_transitions.append((start-1, start))
-            for i in range(start, end): 
-                allowed_state_transitions.append((i, i+1))
-            allowed_state_transitions.append((end-1, end-1))
+        # RULE 3: Inside state
+        allowed_state_transitions.append((2, 2)) # Stay in Body (Self-loop)
+        allowed_state_transitions.append((2, 0)) # Exit to Mature
+        allowed_state_transitions.append((2, 1)) # Tandem Propeptide Jump
 
         return allowed_state_transitions, allowed_starts, allowed_ends
 
