@@ -331,29 +331,33 @@ def batchify_sequences(sequences, batch_size: int = 100):
 
 
 def convert_path_to_peptide_borders(pred: List[int], start_state, stop_state, offset: int=0) -> List[Tuple[int,int]]:
-    '''Given a sequence of states, find the borders of contiguous peptide segments.
-       Offset adds a constant to all coordinates (1-based indexing in uniprot)
     '''
-
+    Given a sequence of states, find the borders of contiguous peptide segments.
+    Minimalist V4:
+    Start is where the sequence hits start_state (usually 1).
+    End is where the sequence exits the propeptide state space (returns to 0).
+    Offset adds a constant to all coordinates (1-based indexing in uniprot).
+    '''
     seq_peptides = []
     is_peptide = False
+    peptide_start = -1
 
     for pos, p in enumerate(pred):
-        
-        if p == start_state and not is_peptide: # open a new peptide
+        if p >= start_state and not is_peptide:
             is_peptide = True
             peptide_start = pos
 
-        # Close the peptide at the position that has the stop state. (can restart peptide immediately without NO-peptide gap.)
-        elif p == stop_state and is_peptide: #close the peptide
+        elif p == 0 and is_peptide:
             is_peptide = False
-            seq_peptides.append((peptide_start +offset, pos +offset))
-        else:
-            pass # for positions that are not start_state or stop_state, do nothing.
+            # The propeptide ended on the PREVIOUS residue.
+            # pos is currently the index of the first Mature residue.
+            # UniProt is inclusive, so the end of the propeptide is (pos - 1)
+            # wait, if pos=5 is 0, then pos=4 was the last propeptide.
+            # (peptide_start + offset, (pos - 1) + offset)
+            seq_peptides.append((peptide_start + offset, (pos - 1) + offset))
 
-    # close the last peptide if same as sequence end.
     if is_peptide:
-        seq_peptides.append((peptide_start +offset,pos +offset))
+        seq_peptides.append((peptide_start + offset, (len(pred) - 1) + offset))
         
     return seq_peptides
 

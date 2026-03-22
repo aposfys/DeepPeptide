@@ -38,8 +38,14 @@ class LSTMCNN(nn.Module):
 
 
         self.pos_encoder = PositionalEncoding(input_size)
-        self.layer_norm = nn.LayerNorm(input_size)
-        self.projector = nn.Linear(input_size, 256)
+
+        # V4 ESM3 Hardening Bottleneck
+        self.esm3_bottleneck = nn.Sequential(
+            nn.Linear(input_size, 256),
+            nn.LayerNorm(256),
+            nn.ReLU(),
+            nn.Dropout(0.1)
+        )
         self.input_dropout = nn.Dropout1d(p=dropout_input)  # keep_prob=0.75
         self.conv1 = nn.Conv1d(in_channels=256, out_channels=n_filters,
                             kernel_size=filter_size, stride=1, padding=filter_size // 2) 
@@ -66,17 +72,14 @@ class LSTMCNN(nn.Module):
         '''
         out = embeddings # [batch_size, embeddings_dim, sequence_length]
         seq_lengths = mask.sum(dim=1)
-        # Apply Feature Normalization to stabilize 1536d ESM3 variance
-        out = out.transpose(1, 2) # [B, L, D]
-        out = self.layer_norm(out)
-
-        # Add Positional Encodings
+        # Add Positional Encodings to Raw ESM3
+        out = out.transpose(1, 2) # [B, L, 1536]
         out = self.pos_encoder(out)
 
-        # Compress 1536 -> 256 via Linear Bottleneck
-        out = self.projector(out)
+        # V4 ESM3 Hardening Bottleneck (Linear -> LayerNorm -> ReLU -> Dropout)
+        out = self.esm3_bottleneck(out)
 
-        out = out.transpose(1, 2) # [B, D, L]
+        out = out.transpose(1, 2) # [B, 256, L]
 
         out = self.input_dropout(out)  # 2D feature map dropout
 
@@ -271,17 +274,14 @@ class LSTM(nn.Module):
         '''
         out = embeddings # [batch_size, embeddings_dim, sequence_length]
         seq_lengths = mask.sum(dim=1)
-        # Apply Feature Normalization to stabilize 1536d ESM3 variance
-        out = out.transpose(1, 2) # [B, L, D]
-        out = self.layer_norm(out)
-
-        # Add Positional Encodings
+        # Add Positional Encodings to Raw ESM3
+        out = out.transpose(1, 2) # [B, L, 1536]
         out = self.pos_encoder(out)
 
-        # Compress 1536 -> 256 via Linear Bottleneck
-        out = self.projector(out)
+        # V4 ESM3 Hardening Bottleneck (Linear -> LayerNorm -> ReLU -> Dropout)
+        out = self.esm3_bottleneck(out)
 
-        out = out.transpose(1, 2) # [B, D, L]
+        out = out.transpose(1, 2) # [B, 256, L]
 
         out = self.input_dropout(out)  # 2D feature map dropout
 
@@ -357,17 +357,14 @@ class CNN(nn.Module):
         '''
         out = embeddings # [batch_size, embeddings_dim, sequence_length]
         seq_lengths = mask.sum(dim=1)
-        # Apply Feature Normalization to stabilize 1536d ESM3 variance
-        out = out.transpose(1, 2) # [B, L, D]
-        out = self.layer_norm(out)
-
-        # Add Positional Encodings
+        # Add Positional Encodings to Raw ESM3
+        out = out.transpose(1, 2) # [B, L, 1536]
         out = self.pos_encoder(out)
 
-        # Compress 1536 -> 256 via Linear Bottleneck
-        out = self.projector(out)
+        # V4 ESM3 Hardening Bottleneck (Linear -> LayerNorm -> ReLU -> Dropout)
+        out = self.esm3_bottleneck(out)
 
-        out = out.transpose(1, 2) # [B, D, L]
+        out = out.transpose(1, 2) # [B, 256, L]
 
         out = self.input_dropout(out)  # 2D feature map dropout
 

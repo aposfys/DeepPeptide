@@ -46,8 +46,14 @@ class LSTMCNN(nn.Module):
 
 
         self.pos_encoder = PositionalEncoding(input_size)
-        self.layer_norm = nn.LayerNorm(input_size)
-        self.projector = nn.Linear(input_size, 256)
+
+        # V4 ESM3 Hardening Bottleneck
+        self.esm3_bottleneck = nn.Sequential(
+            nn.Linear(input_size, 256),
+            nn.LayerNorm(256),
+            nn.ReLU(),
+            nn.Dropout(0.1)
+        )
         self.input_dropout = nn.Dropout1d(p=dropout_input)  # keep_prob=0.75
         self.conv1 = nn.Conv1d(in_channels=256, out_channels=n_filters,
                             kernel_size=filter_size, stride=1, padding=filter_size // 2)  # in:20, out=32
@@ -75,17 +81,14 @@ class LSTMCNN(nn.Module):
         out = embeddings # [batch_size, embeddings_dim, sequence_length]
         seq_lengths = mask.sum(dim=1)
 
-        # Apply Feature Normalization to stabilize 1536d ESM3 variance
-        out = out.transpose(1, 2) # [B, L, D]
-        out = self.layer_norm(out)
-
-        # Add Positional Encodings
+        # Add Positional Encodings to Raw ESM3
+        out = out.transpose(1, 2) # [B, L, 1536]
         out = self.pos_encoder(out)
 
-        # Compress 1536 -> 256 via Linear Bottleneck
-        out = self.projector(out)
+        # V4 ESM3 Hardening Bottleneck (Linear -> LayerNorm -> ReLU -> Dropout)
+        out = self.esm3_bottleneck(out)
 
-        out = out.transpose(1, 2) # [B, D, L]
+        out = out.transpose(1, 2) # [B, 256, L]
 
         out = self.input_dropout(out)  # 2D feature map dropout
 
@@ -147,30 +150,31 @@ class CRFBaseModel(nn.Module):
         self.crf = CRF(num_states, batch_first=True, allowed_transitions=allowed_transitions, allowed_start=allowed_start, allowed_end=allowed_end)
 
     @staticmethod
-    def get_crf_constraints(max_len: int = 2, min_len: int = 1, n_branches: int = 1):
-        '''Build the pure BIO (Beginning, Inside, Outside) propeptide state space model.'''
-        # State 0: Outside (Mature / Background)
-        # State 1: Beginning (First residue of Propeptide)
-        # State 2: Inside (Body of Propeptide)
-
-        allowed_starts = [0, 1]
-        allowed_ends = [0, 1, 2]
+    def get_crf_constraints(max_len: int = 50, min_len: int = 5, n_branches: int = 1):
+        '''Build the Minimalist V4 Propeptide state space model.'''
+        allowed_starts = [0, 1] # Strict Anchor: Only enter from start
+        allowed_ends = [0] + list(range(min_len, max_len + 1))
 
         allowed_state_transitions = []
 
         # RULE 1: Mature state
         allowed_state_transitions.append((0, 0)) # Stay in Mature
-        allowed_state_transitions.append((0, 1)) # Start Propeptide
+        allowed_state_transitions.append((0, 1)) # Start first Propeptide
 
-        # RULE 2: Beginning state
-        allowed_state_transitions.append((1, 2)) # Progress to Body
-        allowed_state_transitions.append((1, 0)) # Exit (1-residue propeptide)
-        allowed_state_transitions.append((1, 1)) # Tandem 1-residue propeptides
+        # RULE 2: The Ladder
+        for i in range(1, max_len + 1):
+            # A. Progress: i -> i+1
+            if i < max_len:
+                allowed_state_transitions.append((i, i + 1))
 
-        # RULE 3: Inside state
-        allowed_state_transitions.append((2, 2)) # Stay in Body (Self-loop)
-        allowed_state_transitions.append((2, 0)) # Exit to Mature
-        allowed_state_transitions.append((2, 1)) # Tandem Propeptide Jump
+            # B. Exit: i -> 0 (Finish propeptide and enter Mature)
+            # Minimalist V4: Block exit transitions (i -> 0) for i < 5
+            if i >= min_len:
+                allowed_state_transitions.append((i, 0))
+
+        # RULE 3: Long-Tail Fix
+        # State 50 Self-loop (50 -> 50)
+        allowed_state_transitions.append((max_len, max_len))
 
         return allowed_state_transitions, allowed_starts, allowed_ends
 
