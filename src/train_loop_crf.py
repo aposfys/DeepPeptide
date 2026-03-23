@@ -46,9 +46,9 @@ def get_model(args: argparse.Namespace):
     if args.model == 'lstmcnncrf':
         model = LSTMCNNCRF(
             input_size = args.embedding_dim,
-            num_labels=2,
+            num_labels=3,
             dropout_input=args.dropout,
-            num_states= 51,
+            num_states= 101,
             n_filters=args.num_filters,
             hidden_size=args.hidden_size,
             filter_size=args.kernel_size, 
@@ -230,9 +230,9 @@ def parse_arguments():
     p.add_argument('--batch_size', '-bs', type=int, default=16, help='samples that will be processed in parallel')
 
     p.add_argument('--lr', type=float, default=1e-5)
-    p.add_argument('--weight_decay', type=float, default=1e-2)
-    p.add_argument('--dropout', type=float, default=0.1)
-    p.add_argument('--conv_dropout', type=float, default=0.1)
+    p.add_argument('--weight_decay', type=float, default=5e-2)
+    p.add_argument('--dropout', type=float, default=0.3)
+    p.add_argument('--conv_dropout', type=float, default=0.3)
     p.add_argument('--kernel_size', type=int, default=3)
     p.add_argument('--num_filters', type=int, default=32)
     p.add_argument('--hidden_size', type=int, default=64)

@@ -386,9 +386,9 @@ class PrecomputedCSVForCRFDataset(Dataset):
             sequences = data['sequence'].tolist()
 
             # Propeptide Isolation: Mature peptides are passed as [] to force State 0.
-            # Propeptides are mapped to States 1-50.
+            # Propeptides are mapped to States 1-100 (V5 Logic with dedicated Cleavage State 100).
             labels = [peptide_list_to_label_sequence([], len(seq)) for seq in sequences]
-            propeptide_labels = [peptide_list_to_label_sequence(peptides, len(seq), start_state=1, max_len=50) for peptides, seq in zip(propeptide_coordinates, sequences)]
+            propeptide_labels = [peptide_list_to_label_sequence(peptides, len(seq), start_state=1, max_len=100, use_cleavage_state=True) for peptides, seq in zip(propeptide_coordinates, sequences)]
             self.labels = [x+y for x,y in zip(labels, propeptide_labels)]
             
             self.peptides_only = coordinates
@@ -550,9 +550,9 @@ class PrecomputedCSVForOverlapCRFDataset(Dataset):
         peptides, propeptides = self._sample_from_overlapping_peptides(peptides, propeptides)
 
         # Propeptide Isolation: Mature peptides are passed as [] to force State 0.
-        # Propeptides are mapped to States 1-50.
-        label = peptide_list_to_label_sequence([], seq_len, max_len=50)
-        propeptide_label = peptide_list_to_label_sequence(propeptides, seq_len, start_state=1, max_len=50)
+        # Propeptides are mapped to States 1-100 (V5 Logic with dedicated Cleavage State 100).
+        label = peptide_list_to_label_sequence([], seq_len, max_len=100)
+        propeptide_label = peptide_list_to_label_sequence(propeptides, seq_len, start_state=1, max_len=100, use_cleavage_state=True)
         label = label + propeptide_label # numpy arrays with no overlap at nonzero positions so we can just add the two.
 
 

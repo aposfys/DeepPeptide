@@ -13,7 +13,7 @@ from typing import List, Tuple
 from tqdm.auto import tqdm
 
 PEPTIDE_START_STATE, PEPTIDE_END_STATE = -1, -1
-PROPEPTIDE_START_STATE, PROPEPTIDE_END_STATE = 1, 50
+PROPEPTIDE_START_STATE, PROPEPTIDE_END_STATE = 1, 100
 
 def convert_path_to_peptide_borders(pred: List[int], start_state, stop_state, offset: int=0) -> List[Tuple[int,int]]:
     '''
@@ -186,11 +186,11 @@ def compute_all_metrics(probs: np.ndarray, preds: np.ndarray, labels: np.ndarray
     # Sequence-level (Pixel-wise) accuracy and F1 for propeptides
     seq_tp, seq_fp, seq_fn, seq_tn = 0, 0, 0, 0
     for pred, true in zip(preds, labels):
-        # Collapse states 1-50 to 1
+        # Collapse states 1-100 to 1 (Treating both Propeptide Body and Cleavage Site as "Propeptide")
         p = np.array(pred)
         t = np.array(true)
-        p_binary = (p >= 1) & (p <= 50)
-        t_binary = (t >= 1) & (t <= 50)
+        p_binary = (p >= 1) & (p <= 100)
+        t_binary = (t >= 1) & (t <= 100)
 
         seq_tp += np.logical_and(p_binary, t_binary).sum()
         seq_fp += np.logical_and(p_binary, ~t_binary).sum()

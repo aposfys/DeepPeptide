@@ -12,27 +12,32 @@ class CRFBaseModel(nn.Module):
     '''Extend this model by defining a feature_extractor.'''
     def __init__(
         self,
-        num_labels: int = 2, #logits (=emissions) to produce by the NN
-        num_states = 61 # total number of states in the state space model
+        num_labels: int = 3, #logits (=emissions) to produce by the NN (0: Mature, 1: Propeptide Body, 2: Cleavage Site)
+        num_states = 101 # total number of states in the state space model (0: Mature, 1-99: Propeptide Body, 100: Cleavage Site)
         ) -> None:
 
 
         super().__init__()
-        self.max_len = 50
+        self.max_len = 100 # V5: Expand ruler to 100 states to handle long-tail propeptides accurately
         self.min_len = 5
         self.feature_extractor = None
         self.features_to_emissions = nn.Linear(64, num_labels)
         self.num_states = num_states
 
-        allowed_transitions, allowed_start, allowed_end = self.get_crf_constraints(self.max_len, self.min_len, n_branches=2 if num_labels==3 else 1)
+        allowed_transitions, allowed_start, allowed_end = self.get_crf_constraints(self.max_len, self.min_len)
         self.allowed_transitions = allowed_transitions
         self.crf = CRF(num_states, batch_first=True, allowed_transitions=allowed_transitions, allowed_start=allowed_start, allowed_end=allowed_end)
 
     @staticmethod
-    def get_crf_constraints(max_len: int = 60, min_len: int = 5, n_branches: int = 1):
-        '''Build the pure propeptide state space model.'''
+    def get_crf_constraints(max_len: int = 100, min_len: int = 5):
+        '''Build the V5 Precision Propeptide Specialist state space model.
+           States:
+           0: Mature
+           1 to (max_len - 1): Propeptide Body
+           max_len: Cleavage Site (The final residue of a propeptide)
+        '''
         allowed_starts = list(range(max_len + 1)) # Architectural Relaxation: Anchor Release
-        allowed_ends = [0] + list(range(min_len, max_len + 1))
+        allowed_ends = [0, max_len]
 
         allowed_state_transitions = []
 
@@ -40,45 +45,29 @@ class CRFBaseModel(nn.Module):
         allowed_state_transitions.append((0, 0)) # Stay in Mature
         allowed_state_transitions.append((0, 1)) # Start first Propeptide
 
-        # RULE 2: The Ladder
-        for i in range(1, max_len + 1):
-            # A. Progress: i -> i+1 (if not at the end)
-            if i < max_len:
+        # RULE 2: The Ladder (Propeptide Body 1 to 99)
+        for i in range(1, max_len):
+            # A. Progress through the body: i -> i+1
+            if i < max_len - 1:
                 allowed_state_transitions.append((i, i + 1))
 
-            # B. Exit: i -> 0 (Finish propeptide and enter Mature)
-            # Allowed at any state i >= 5 to enforce the Minimum Length constraint of 5 residues.
-            if i >= 5:
-                allowed_state_transitions.append((i, 0))
+            # B. Identify Cleavage: i -> max_len (Jump to the cleavage site state)
+            # A propeptide must be at least `min_len` residues long total.
+            if i >= (min_len - 1):
+                allowed_state_transitions.append((i, max_len))
 
-                # C. MULTI-PROPEPTIDE FIX: i -> 1
-                # This allows jumping from the end of one propeptide directly to the start of the next one (1).
-                # Only allowed if the finished propeptide met the minimum length requirement.
-                allowed_state_transitions.append((i, 1))
+        # RULE 3: Body Overflow Safety
+        # If a propeptide is >100 residues, it loops at 99 until it's ready to cleave.
+        allowed_state_transitions.append((max_len - 1, max_len - 1))
 
-        # RULE 3: Overflow Safety (Long-Tail Fix)
-        allowed_state_transitions.append((max_len, max_len))
+        # Ensure long-tail propeptides can still exit to the cleavage site
+        if (max_len - 1, max_len) not in allowed_state_transitions:
+            allowed_state_transitions.append((max_len - 1, max_len))
 
-        # Ensure max_len exits exist explicitly in case loop logic is misconstrued
-        if (max_len, 0) not in allowed_state_transitions:
-            allowed_state_transitions.append((max_len, 0))
-        if (max_len, 1) not in allowed_state_transitions:
-            allowed_state_transitions.append((max_len, 1))
-
-        # branch 2 logic if still requested by code
-        if n_branches == 2:
-            start = 1 + max_len
-            end = 2*max_len
-            allowed_starts.append(start)
-            allowed_ends.append(end)
-            allowed_state_transitions.append((0,start))
-            allowed_state_transitions.append((end,start)) 
-            allowed_state_transitions.append((end,0))
-            allowed_state_transitions.append((end,1))
-            allowed_state_transitions.append((start-1, start))
-            for i in range(start, end): 
-                allowed_state_transitions.append((i, i+1))
-            allowed_state_transitions.append((end-1, end-1))
+        # RULE 4: Cleavage Exits (max_len -> 0 or 1)
+        # Once at the cleavage site, the sequence MUST exit the propeptide.
+        allowed_state_transitions.append((max_len, 0)) # Standard exit to Mature
+        allowed_state_transitions.append((max_len, 1)) # Multi-propeptide adjacent jump
 
         return allowed_state_transitions, allowed_starts, allowed_ends
 
@@ -96,17 +85,13 @@ class CRFBaseModel(nn.Module):
 
     
     def _repeat_emissions(self, emissions):
-        '''Turn a (batch_size, seq_len, 2) tensor into (batch_size, seq_len, num_states) by repeating the emissions at position 1.'''
+        '''Turn a (batch_size, seq_len, 3) tensor into (batch_size, seq_len, num_states) for V5.'''
 
-        if emissions.shape[-1] == 2:
-            emissions_out = torch.zeros(emissions.shape[0], emissions.shape[1], self.num_states, dtype=emissions.dtype, device=emissions.device)    
-            emissions_out[:,:,0] = emissions[:,:,0]
-            emissions_out[:,:, 1:(self.max_len+1)] = emissions[:,:,1].unsqueeze(-1).expand(-1, -1, self.max_len)
-        elif emissions.shape[-1] == 3:
+        if emissions.shape[-1] == 3:
             emissions_out = torch.zeros(emissions.shape[0], emissions.shape[1], self.num_states, dtype=emissions.dtype, device=emissions.device)
-            emissions_out[:,:,0] = emissions[:,:,0]
-            emissions_out[:,:, 1:] = emissions[:,:,1].unsqueeze(-1)
-            emissions_out[:,:, (self.max_len+1):] = emissions[:,:,2].unsqueeze(-1)
+            emissions_out[:,:,0] = emissions[:,:,0] # Mature State
+            emissions_out[:,:, 1:self.max_len] = emissions[:,:,1].unsqueeze(-1).expand(-1, -1, self.max_len - 1) # Propeptide Body
+            emissions_out[:,:, self.max_len] = emissions[:,:,2] # Cleavage Site
         else:
             raise NotImplementedError()
         
@@ -118,12 +103,11 @@ class CRFBaseModel(nn.Module):
         features = self.feature_extractor(embeddings, mask) # (batch_size, seq_len, feature_dim)
         emissions = self.features_to_emissions(features) # (batch_size, seq_len, num_labels)
 
-        # Inverted Class Weighting: Bias State 1 (Propeptide) to penalize false negatives.
-        # Since most of the protein is Mature, the model ignored the propeptide signal entirely
-        # and predicted 0-99 heuristically. Boosting State 1 logits makes missing a propeptide expensive.
-        propeptide_bias = 0.0
-        if emissions.shape[-1] >= 2:
+        # Inverted Class Weighting: Bias State 1 and 2 to penalize false negatives.
+        propeptide_bias = 0.5
+        if emissions.shape[-1] == 3:
             emissions[:, :, 1] = emissions[:, :, 1] + propeptide_bias
+            emissions[:, :, 2] = emissions[:, :, 2] + propeptide_bias
 
         emissions = self._repeat_emissions(emissions) # (batch_size, seq_len, num_states)
         
