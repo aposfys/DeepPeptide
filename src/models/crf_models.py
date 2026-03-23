@@ -245,7 +245,7 @@ class LSTMCNNCRF(CRFBaseModel):
         self.features_to_emissions = nn.Linear(n_filters*2, num_labels)
         self.num_states = num_states
 
-        allowed_transitions, allowed_start, allowed_end = self.get_crf_constraints(self.max_len, self.min_len, n_branches=2 if num_labels==3 else 1)
+        allowed_transitions, allowed_start, allowed_end = self.get_crf_constraints(self.max_len, self.min_len)
         self.crf = CRF(num_states, batch_first=True, allowed_transitions=allowed_transitions, allowed_start=allowed_start, allowed_end=allowed_end)
 
 
