@@ -233,9 +233,9 @@ def parse_arguments():
     p.add_argument('--weight_decay', type=float, default=5e-2)
     p.add_argument('--dropout', type=float, default=0.3)
     p.add_argument('--conv_dropout', type=float, default=0.3)
-    p.add_argument('--kernel_size', type=int, default=3)
+    p.add_argument('--kernel_size', type=int, default=7)
     p.add_argument('--num_filters', type=int, default=32)
-    p.add_argument('--hidden_size', type=int, default=64)
+    p.add_argument('--hidden_size', type=int, default=128)
 
     p.add_argument('--label_type', type=str, default='propeptides_only')
 

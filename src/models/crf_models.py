@@ -104,10 +104,14 @@ class CRFBaseModel(nn.Module):
         emissions = self.features_to_emissions(features) # (batch_size, seq_len, num_labels)
 
         # Inverted Class Weighting: Bias State 1 and 2 to penalize false negatives.
-        propeptide_bias = 0.5
+        # Body (Class 1) happens ~50 times. Cleavage (Class 2) happens exactly 1 time.
+        # Massive class imbalance! We apply a much stronger bias to Cleavage to force higher recall.
+        body_bias = 0.5
+        cleavage_bias = 2.0
+
         if emissions.shape[-1] == 3:
-            emissions[:, :, 1] = emissions[:, :, 1] + propeptide_bias
-            emissions[:, :, 2] = emissions[:, :, 2] + propeptide_bias
+            emissions[:, :, 1] = emissions[:, :, 1] + body_bias
+            emissions[:, :, 2] = emissions[:, :, 2] + cleavage_bias
 
         emissions = self._repeat_emissions(emissions) # (batch_size, seq_len, num_states)
         
