@@ -54,6 +54,12 @@ class LSTMCNN(nn.Module):
 
         self.biLSTM = nn.LSTM(input_size=n_filters, hidden_size=hidden_size, num_layers=num_lstm_layers,
                             bias=True, batch_first=True, dropout=0.0, bidirectional=True)
+
+        # Attention Enhancement: Allows the model to look at distant contexts (like Signal Peptide)
+        # while deciding on the Propeptide cleavage site, without losing the LSTM's sequential memory.
+        self.attention = nn.MultiheadAttention(embed_dim=hidden_size * 2, num_heads=4, batch_first=True, dropout=dropout_input)
+        self.attn_norm = nn.LayerNorm(hidden_size * 2)
+
         self.conv2 = nn.Conv1d(in_channels=hidden_size * 2, out_channels=n_filters * 2, kernel_size=5,
                             stride=1, padding=5 // 2)  # (128,64)
 
@@ -117,7 +123,19 @@ class LSTMCNN(nn.Module):
         # last assert condition does not hold when setting enforce_sorted=False
         # performance loss should be marginal. Never used packing before for LM experiments anyway, worked too.
         assert bi_out.size(1) == seq_lengths.max()# == seq_lengths[0], "Pad_packed error in size dim"
-        packed_out = bi_out.permute(0, 2, 1)#.float()  # [128, 70, 128] -> [128, 128, 70]
+
+        # Self-Attention Enhancement
+        # Provide the boolean mask directly to `key_padding_mask`
+        # PyTorch requires True for positions to ignore (padding)
+        attn_mask = ~mask.bool()
+
+        # Self-attention over the BiLSTM outputs
+        attn_out, _ = self.attention(bi_out, bi_out, bi_out, key_padding_mask=attn_mask, need_weights=False)
+
+        # Residual connection + LayerNorm
+        enhanced_out = self.attn_norm(bi_out + attn_out)
+
+        packed_out = enhanced_out.permute(0, 2, 1) # [B, L, D] -> [B, D, L]
 
         conv2_out = self.ReLU(self.conv2(packed_out)) # [128, 128, 70] -> [128, 64, 70]
 

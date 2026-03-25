@@ -2,17 +2,22 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-# 1. Test ESM3 Bottleneck in LSTMCNN
+# 1. Test ESM3 Bottleneck and Attention in LSTMCNN
 from src.models.lstm_cnn import LSTMCNN
-def test_bottleneck():
-    print("Testing ESM3 Bottleneck...")
-    model = LSTMCNN(input_size=1536)
+def test_bottleneck_and_attention():
+    print("Testing ESM3 Bottleneck & Self-Attention...")
+    model = LSTMCNN(input_size=1536, hidden_size=128)
 
     assert hasattr(model, 'bottleneck'), "Bottleneck missing"
     assert isinstance(model.bottleneck, nn.Sequential), "Bottleneck is not nn.Sequential"
     assert isinstance(model.bottleneck[0], nn.Linear), "First layer not Linear"
     assert model.bottleneck[0].in_features == 1536 and model.bottleneck[0].out_features == 256, "Incorrect Linear dims"
-    print("✓ Bottleneck correct.")
+
+    assert hasattr(model, 'attention'), "MultiheadAttention missing"
+    assert isinstance(model.attention, nn.MultiheadAttention), "Not a MultiheadAttention layer"
+    assert model.attention.embed_dim == 256, "Attention embed_dim should match BiLSTM hidden_size * 2 (128*2)"
+
+    print("✓ Bottleneck & Attention correct.")
 
 # 2. Test V5 Transition Constraints in CRFBaseModel
 from src.models.crf_models import CRFBaseModel
@@ -95,7 +100,7 @@ def test_dataset_labels():
 
 if __name__ == '__main__':
     print("--- Running Precision V5 Architecture Tests ---")
-    test_bottleneck()
+    test_bottleneck_and_attention()
     test_constraints()
     test_emissions()
     test_dataset_labels()

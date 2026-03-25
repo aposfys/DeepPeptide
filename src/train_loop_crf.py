@@ -103,6 +103,7 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
     # model.to(device)
     model = model.to(device)
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, verbose=True)
     writer = SummaryWriter(args.out_dir)
 
     previous_best = -100000000000
@@ -125,6 +126,10 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
         print(f'Epoch {epoch} completed. Validation loss {valid_loss:.2f}')
 
         stopping_metric = valid_metrics['f1 propeptides']
+
+        # Step the learning rate scheduler based on the validation metric
+        scheduler.step(stopping_metric)
+
         if stopping_metric > previous_best:
             previous_best = stopping_metric
             best_val_metrics = valid_metrics
