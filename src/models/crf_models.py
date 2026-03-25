@@ -105,9 +105,10 @@ class CRFBaseModel(nn.Module):
 
         # Inverted Class Weighting: Bias State 1 and 2 to penalize false negatives.
         # Body (Class 1) happens ~50 times. Cleavage (Class 2) happens exactly 1 time.
-        # Massive class imbalance! We apply a much stronger bias to Cleavage to force higher recall.
+        # Massive class imbalance! We apply an enormous bias (5.0) to Cleavage to force the
+        # model to stop being conservative and aggressively identify exact cleavage sites.
         body_bias = 0.5
-        cleavage_bias = 2.0
+        cleavage_bias = 5.0
 
         if emissions.shape[-1] == 3:
             emissions[:, :, 1] = emissions[:, :, 1] + body_bias

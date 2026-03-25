@@ -68,8 +68,12 @@ class LSTMCNN(nn.Module):
         self.attention = nn.MultiheadAttention(embed_dim=hidden_size * 2, num_heads=4, batch_first=True, dropout=dropout_input)
         self.attn_norm = nn.LayerNorm(hidden_size * 2)
 
-        self.conv2 = nn.Conv1d(in_channels=hidden_size * 2, out_channels=n_filters * 2, kernel_size=5,
-                            stride=1, padding=5 // 2)  # (128,64)
+        # Exactness Fix: Changed from kernel_size=5 to kernel_size=1 (Pointwise Convolution).
+        # A kernel of 5 physically "smeared" the Cleavage Site signal across 5 residues,
+        # forcing the model to guess the exact peak. A kernel of 1 forces a razor-sharp
+        # output based purely on the localized Attention/LSTM context.
+        self.conv2 = nn.Conv1d(in_channels=hidden_size * 2, out_channels=n_filters * 2, kernel_size=1,
+                            stride=1, padding=0)
 
         if self.n_tissues>0:
             self.linear_tissue = nn.Linear(n_tissues, hidden_size)  # 4 -> 64
@@ -251,9 +255,10 @@ class CRFBaseModel(nn.Module):
 
         # Inverted Class Weighting: Bias State 1 and 2 to penalize false negatives.
         # Body (Class 1) happens ~50 times. Cleavage (Class 2) happens exactly 1 time.
-        # Massive class imbalance! We apply a much stronger bias to Cleavage to force higher recall.
+        # Massive class imbalance! We apply an enormous bias (5.0) to Cleavage to force the
+        # model to stop being conservative and aggressively identify exact cleavage sites.
         body_bias = 0.5
-        cleavage_bias = 2.0
+        cleavage_bias = 5.0
 
         if emissions.shape[-1] == 3:
             emissions[:, :, 1] = emissions[:, :, 1] + body_bias

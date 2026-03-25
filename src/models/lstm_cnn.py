@@ -60,8 +60,12 @@ class LSTMCNN(nn.Module):
         self.attention = nn.MultiheadAttention(embed_dim=hidden_size * 2, num_heads=4, batch_first=True, dropout=dropout_input)
         self.attn_norm = nn.LayerNorm(hidden_size * 2)
 
-        self.conv2 = nn.Conv1d(in_channels=hidden_size * 2, out_channels=n_filters * 2, kernel_size=5,
-                            stride=1, padding=5 // 2)  # (128,64)
+        # Exactness Fix: Changed from kernel_size=5 to kernel_size=1 (Pointwise Convolution).
+        # A kernel of 5 physically "smeared" the Cleavage Site signal across 5 residues,
+        # forcing the model to guess the exact peak. A kernel of 1 forces a razor-sharp
+        # output based purely on the localized Attention/LSTM context.
+        self.conv2 = nn.Conv1d(in_channels=hidden_size * 2, out_channels=n_filters * 2, kernel_size=1,
+                            stride=1, padding=0)
 
         if self.n_tissues>0:
             self.linear_tissue = nn.Linear(n_tissues, hidden_size)  # 4 -> 64
