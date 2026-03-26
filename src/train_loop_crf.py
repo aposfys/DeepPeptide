@@ -103,7 +103,8 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
     # model.to(device)
     model = model.to(device)
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5)
+    # Reduced patience to 3 for shorter (50 epoch) runs so the LR decays fast enough to settle the loss.
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
     writer = SummaryWriter(args.out_dir)
 
     previous_best = -100000000000
