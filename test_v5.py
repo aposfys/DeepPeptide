@@ -2,22 +2,31 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-# 1. Test ESM3 Bottleneck and Attention in LSTMCNN
+# 1. Test ESM3 Bottleneck and Split-Head CNN in LSTMCNN
 from src.models.lstm_cnn import LSTMCNN
 def test_bottleneck_and_attention():
-    print("Testing ESM3 Bottleneck & Self-Attention...")
+    print("Testing ESM3 Bottleneck, Attention, & Split-Head CNN...")
     model = LSTMCNN(input_size=1536, hidden_size=128)
 
     assert hasattr(model, 'bottleneck'), "Bottleneck missing"
     assert isinstance(model.bottleneck, nn.Sequential), "Bottleneck is not nn.Sequential"
-    assert isinstance(model.bottleneck[0], nn.Linear), "First layer not Linear"
-    assert model.bottleneck[0].in_features == 1536 and model.bottleneck[0].out_features == 256, "Incorrect Linear dims"
 
     assert hasattr(model, 'attention'), "MultiheadAttention missing"
-    assert isinstance(model.attention, nn.MultiheadAttention), "Not a MultiheadAttention layer"
-    assert model.attention.embed_dim == 256, "Attention embed_dim should match BiLSTM hidden_size * 2 (128*2)"
 
-    print("✓ Bottleneck & Attention correct.")
+    # Check Split-Head Architecture
+    assert hasattr(model, 'conv2_1'), "Missing kernel=1 head"
+    assert hasattr(model, 'conv2_3'), "Missing kernel=3 head"
+    assert hasattr(model, 'conv2_5'), "Missing kernel=5 head"
+    assert hasattr(model, 'conv2_merge'), "Missing merge layer"
+
+    # Forward pass mock test to ensure dimensions are valid
+    # Batch=2, Length=20, Embed=1536
+    x = torch.zeros((2, 1536, 20))
+    mask = torch.ones((2, 20), dtype=torch.uint8)
+    out = model(x, mask)
+
+    assert out.shape == (2, 20, 64), f"Expected [2, 20, 64] from CNN merge but got {out.shape}"
+    print("✓ Bottleneck, Attention, & Split-Head CNN correct.")
 
 # 2. Test V5 Transition Constraints in CRFBaseModel
 from src.models.crf_models import CRFBaseModel

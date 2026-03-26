@@ -28,6 +28,22 @@ class CRFBaseModel(nn.Module):
         self.allowed_transitions = allowed_transitions
         self.crf = CRF(num_states, batch_first=True, allowed_transitions=allowed_transitions, allowed_start=allowed_start, allowed_end=allowed_end)
 
+        # V5.3 CRF Transition Prior Injection
+        # Hardcode positive weights for Entry and Cleavage Exits to prevent the
+        # randomly initialized transition matrix from paralyzing recall.
+        # We use +2.0 (e^2 = ~7.4x more likely) as a strong but safe magnet.
+        with torch.no_grad():
+            # Entry Hesitance Fix: Mature -> Body Start (0 -> 1)
+            self.crf.transitions[0, 1] += 2.0
+
+            # i -> 100 (Body to Cleavage)
+            for i in range(self.min_len - 1, self.max_len):
+                self.crf.transitions[i, self.max_len] += 2.0
+
+            # 100 -> 0 and 100 -> 1 (Cleavage to Mature or New Propeptide)
+            self.crf.transitions[self.max_len, 0] += 2.0
+            self.crf.transitions[self.max_len, 1] += 2.0
+
     @staticmethod
     def get_crf_constraints(max_len: int = 100, min_len: int = 5):
         '''Build the V5 Precision Propeptide Specialist state space model.
@@ -105,10 +121,11 @@ class CRFBaseModel(nn.Module):
 
         # Inverted Class Weighting: Bias State 1 and 2 to penalize false negatives.
         # Body (Class 1) happens ~50 times. Cleavage (Class 2) happens exactly 1 time.
-        # Massive class imbalance! We apply an enormous bias (5.0) to Cleavage to force the
-        # model to stop being conservative and aggressively identify exact cleavage sites.
+        # V5.3: We reset cleavage_bias to 0.5 because the massive CRF Transition Prior Injection
+        # now handles the heavy lifting of forcing the exits, and 5.0 on top of the Split-Head
+        # might trigger false positives.
         body_bias = 0.5
-        cleavage_bias = 5.0
+        cleavage_bias = 0.5
 
         if emissions.shape[-1] == 3:
             emissions[:, :, 1] = emissions[:, :, 1] + body_bias
