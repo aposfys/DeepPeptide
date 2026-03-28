@@ -114,6 +114,9 @@ class CRFBaseModel(nn.Module):
             emissions[:, :, 1] = emissions[:, :, 1] + body_bias
             emissions[:, :, 2] = emissions[:, :, 2] + cleavage_bias
 
+        # Keep a reference to the raw 3-class logits for the Auxiliary BCE Loss
+        raw_logits = emissions.clone()
+
         emissions = self._repeat_emissions(emissions) # (batch_size, seq_len, num_states)
         
         # viterbi_paths = self.crf.decode(emissions=emissions, mask = mask.byte())
@@ -132,7 +135,7 @@ class CRFBaseModel(nn.Module):
 
             if loss.item()>10000:
                 self._debug_crf(targets)
-            return (probs, viterbi_paths, loss)
+            return (probs, viterbi_paths, loss, raw_logits)
         else:
             return probs, viterbi_paths, path_probs
 

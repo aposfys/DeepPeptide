@@ -163,6 +163,8 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
                     optimizer: torch.optim.Optimizer, 
                     writer: SummaryWriter,
                     do_train: bool = True,
+                    alpha: float = 5.0,
+                    pos_weight: float = 50.0
                 ) -> Tuple[float, List[np.ndarray], List[List[int]], List[np.ndarray], List[np.ndarray]]:
     '''
     Run a dataloader through the model. Collect predicted probabilitities and
@@ -175,6 +177,12 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
     probs = [] # per-position probabilities
     preds = [] # viterbi paths
     epoch_loss = []
+
+    # BCE Loss configuration for the Auxiliary Cleavage Tracker
+    bce_criterion = torch.nn.BCEWithLogitsLoss(
+        pos_weight=torch.tensor([pos_weight]).to(device),
+        reduction='none'
+    )
 
     if do_train:
         model.train()
@@ -191,15 +199,33 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
         label = label.long().to(device)
 
         if do_train:
-            pos_probs, pos_preds, loss = model(embeddings, mask, label, skip_marginals=True)
+            pos_probs, pos_preds, crf_loss, raw_logits = model(embeddings, mask, label, skip_marginals=True)
+
+            # V6: Auxiliary Cleavage Loss
+            cleavage_logits = raw_logits[:, :, 2]
+            cleavage_targets = (label == 100).float()
+
+            raw_bce_loss = bce_criterion(cleavage_logits, cleavage_targets)
+            masked_bce_loss = (raw_bce_loss * mask.float()).sum() / mask.float().sum()
+
+            total_loss = crf_loss + (alpha * masked_bce_loss)
+
             torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
-            loss.backward()
+            total_loss.backward()
             optimizer.step()
-            writer.add_scalar('Train/loss', loss.item(), global_step=global_step)
+            writer.add_scalar('Train/loss', total_loss.item(), global_step=global_step)
             global_step += 1
         else:
             with torch.no_grad():
-                pos_probs, pos_preds, loss = model(embeddings, mask, label)
+                pos_probs, pos_preds, crf_loss, raw_logits = model(embeddings, mask, label)
+
+                cleavage_logits = raw_logits[:, :, 2]
+                cleavage_targets = (label == 100).float()
+
+                raw_bce_loss = bce_criterion(cleavage_logits, cleavage_targets)
+                masked_bce_loss = (raw_bce_loss * mask.float()).sum() / mask.float().sum()
+
+                total_loss = crf_loss + (alpha * masked_bce_loss)
 
         true.extend(peptides)
         # Extract unpadded sequences to properly align outputs for pickle
@@ -208,7 +234,7 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
             probs.append(pos_probs[i, :seq_len].detach().cpu().numpy())
             labels.append(label[i, :seq_len].detach().cpu().numpy())
         preds.extend(pos_preds)
-        epoch_loss.append(loss.item())
+        epoch_loss.append(total_loss.item())
 
 
     epoch_loss = sum(epoch_loss)/len(epoch_loss)
