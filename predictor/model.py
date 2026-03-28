@@ -68,14 +68,11 @@ class LSTMCNN(nn.Module):
         self.attention = nn.MultiheadAttention(embed_dim=hidden_size * 2, num_heads=4, batch_first=True, dropout=dropout_input)
         self.attn_norm = nn.LayerNorm(hidden_size * 2)
 
-        # V5.3 Split-Head CNN: Three parallel convolutions to capture the sharp peak (1),
-        # the core motif (3), and the extended biological context (5) simultaneously.
-        self.conv2_1 = nn.Conv1d(in_channels=hidden_size * 2, out_channels=n_filters * 2, kernel_size=1, padding=0)
-        self.conv2_3 = nn.Conv1d(in_channels=hidden_size * 2, out_channels=n_filters * 2, kernel_size=3, padding=1)
-        self.conv2_5 = nn.Conv1d(in_channels=hidden_size * 2, out_channels=n_filters * 2, kernel_size=5, padding=2)
-
-        # Merge the 3 heads back down to the expected 64-dimensional feature space
-        self.conv2_merge = nn.Conv1d(in_channels=(n_filters * 2) * 3, out_channels=n_filters * 2, kernel_size=1, padding=0)
+        # V5.4 Reverted Split-Head complexity: Returning to the best-performing single CNN.
+        # Kernel 3 provides the perfect balance between biological context and boundary sharpness
+        # without over-parameterizing the model.
+        self.conv2 = nn.Conv1d(in_channels=hidden_size * 2, out_channels=n_filters * 2, kernel_size=3,
+                            stride=1, padding=3 // 2)
 
         if self.n_tissues>0:
             self.linear_tissue = nn.Linear(n_tissues, hidden_size)  # 4 -> 64
@@ -150,16 +147,7 @@ class LSTMCNN(nn.Module):
 
         packed_out = enhanced_out.permute(0, 2, 1).float() # [B, L, D] -> [B, D, L]
 
-        # V5.3 Split-Head execution
-        head_1 = self.ReLU(self.conv2_1(packed_out))
-        head_3 = self.ReLU(self.conv2_3(packed_out))
-        head_5 = self.ReLU(self.conv2_5(packed_out))
-
-        # Concatenate along channel dimension [B, D*3, L]
-        merged_heads = torch.cat([head_1, head_3, head_5], dim=1)
-
-        # Merge back to 64 dims
-        conv2_out = self.ReLU(self.conv2_merge(merged_heads))
+        conv2_out = self.ReLU(self.conv2(packed_out))
 
         conv2_out = conv2_out.permute(0, 2, 1) # [B, D, L] -> [B, L, D]
 
@@ -184,22 +172,6 @@ class CRFBaseModel(nn.Module):
         allowed_transitions, allowed_start, allowed_end = self.get_crf_constraints(self.max_len, self.min_len)
         self.allowed_transitions = allowed_transitions
         self.crf = CRF(num_states, batch_first=True, allowed_transitions=allowed_transitions, allowed_start=allowed_start, allowed_end=allowed_end)
-
-        # V5.3 CRF Transition Prior Injection
-        # Hardcode positive weights for Entry and Cleavage Exits to prevent the
-        # randomly initialized transition matrix from paralyzing recall.
-        # We use +2.0 (e^2 = ~7.4x more likely) as a strong but safe magnet.
-        with torch.no_grad():
-            # Entry Hesitance Fix: Mature -> Body Start (0 -> 1)
-            self.crf.transitions[0, 1] += 2.0
-
-            # i -> 100 (Body to Cleavage)
-            for i in range(self.min_len - 1, self.max_len):
-                self.crf.transitions[i, self.max_len] += 2.0
-
-            # 100 -> 0 and 100 -> 1 (Cleavage to Mature or New Propeptide)
-            self.crf.transitions[self.max_len, 0] += 2.0
-            self.crf.transitions[self.max_len, 1] += 2.0
 
     @staticmethod
     def get_crf_constraints(max_len: int = 100, min_len: int = 5):
@@ -282,11 +254,10 @@ class CRFBaseModel(nn.Module):
 
         # Inverted Class Weighting: Bias State 1 and 2 to penalize false negatives.
         # Body (Class 1) happens ~50 times. Cleavage (Class 2) happens exactly 1 time.
-        # V5.3: We reset cleavage_bias to 0.5 because the massive CRF Transition Prior Injection
-        # now handles the heavy lifting of forcing the exits, and 5.0 on top of the Split-Head
-        # might trigger false positives.
+        # V5.4: We returned to a robust cleavage_bias of 2.0 (e^2 ~7.4x more likely) to
+        # combat the class imbalance without artificially breaking the CRF transition matrix.
         body_bias = 0.5
-        cleavage_bias = 0.5
+        cleavage_bias = 2.0
 
         if emissions.shape[-1] == 3:
             emissions[:, :, 1] = emissions[:, :, 1] + body_bias

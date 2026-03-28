@@ -60,14 +60,11 @@ class LSTMCNN(nn.Module):
         self.attention = nn.MultiheadAttention(embed_dim=hidden_size * 2, num_heads=4, batch_first=True, dropout=dropout_input)
         self.attn_norm = nn.LayerNorm(hidden_size * 2)
 
-        # V5.3 Split-Head CNN: Three parallel convolutions to capture the sharp peak (1),
-        # the core motif (3), and the extended biological context (5) simultaneously.
-        self.conv2_1 = nn.Conv1d(in_channels=hidden_size * 2, out_channels=n_filters * 2, kernel_size=1, padding=0)
-        self.conv2_3 = nn.Conv1d(in_channels=hidden_size * 2, out_channels=n_filters * 2, kernel_size=3, padding=1)
-        self.conv2_5 = nn.Conv1d(in_channels=hidden_size * 2, out_channels=n_filters * 2, kernel_size=5, padding=2)
-
-        # Merge the 3 heads back down to the expected 64-dimensional feature space
-        self.conv2_merge = nn.Conv1d(in_channels=(n_filters * 2) * 3, out_channels=n_filters * 2, kernel_size=1, padding=0)
+        # V5.4 Reverted Split-Head complexity: Returning to the best-performing single CNN.
+        # Kernel 3 provides the perfect balance between biological context and boundary sharpness
+        # without over-parameterizing the model.
+        self.conv2 = nn.Conv1d(in_channels=hidden_size * 2, out_channels=n_filters * 2, kernel_size=3,
+                            stride=1, padding=3 // 2)
 
         if self.n_tissues>0:
             self.linear_tissue = nn.Linear(n_tissues, hidden_size)  # 4 -> 64
@@ -143,16 +140,7 @@ class LSTMCNN(nn.Module):
 
         packed_out = enhanced_out.permute(0, 2, 1) # [B, L, D] -> [B, D, L]
 
-        # V5.3 Split-Head execution
-        head_1 = self.ReLU(self.conv2_1(packed_out))
-        head_3 = self.ReLU(self.conv2_3(packed_out))
-        head_5 = self.ReLU(self.conv2_5(packed_out))
-
-        # Concatenate along channel dimension [B, D*3, L]
-        merged_heads = torch.cat([head_1, head_3, head_5], dim=1)
-
-        # Merge back to 64 dims
-        conv2_out = self.ReLU(self.conv2_merge(merged_heads))
+        conv2_out = self.ReLU(self.conv2(packed_out))
 
         conv2_out = conv2_out.permute(0, 2, 1) # [B, D, L] -> [B, L, D]
 
