@@ -21,7 +21,7 @@ class CRFBaseModel(nn.Module):
         self.max_len = 100 # V5: Expand ruler to 100 states to handle long-tail propeptides accurately
         self.min_len = 5
         self.feature_extractor = None
-        self.features_to_emissions = nn.Linear(64, num_labels)
+        self.features_to_emissions = nn.Identity() # V6.1: Neural network directly outputs the 3 classes
         self.num_states = num_states
 
         allowed_transitions, allowed_start, allowed_end = self.get_crf_constraints(self.max_len, self.min_len)
@@ -250,7 +250,7 @@ class LSTMCNNCRF(CRFBaseModel):
         super().__init__(num_labels, num_states)
 
         self.feature_extractor = LSTMCNN(input_size=input_size, dropout_input=dropout_input, n_filters=n_filters, filter_size=filter_size, hidden_size=hidden_size, num_lstm_layers=1, dropout_conv1=dropout_conv1, n_tissues=0)
-        self.features_to_emissions = nn.Linear(n_filters*2, num_labels)
+        self.features_to_emissions = nn.Identity() # V6.1 outputs the logits natively
         self.num_states = num_states
 
         allowed_transitions, allowed_start, allowed_end = self.get_crf_constraints(self.max_len, self.min_len)

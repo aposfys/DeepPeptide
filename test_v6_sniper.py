@@ -2,17 +2,22 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-# 1. Test ESM3 Bottleneck and Attention in LSTMCNN
+# 1. Test ESM3 Bottleneck and Decoupled CNN Heads in LSTMCNN
 from src.models.lstm_cnn import LSTMCNN
 def test_bottleneck_and_attention():
-    print("Testing ESM3 Bottleneck & Self-Attention...")
+    print("Testing ESM3 Bottleneck, Attention, & Decoupled CNN...")
     model = LSTMCNN(input_size=1536, hidden_size=128)
 
     assert hasattr(model, 'bottleneck'), "Bottleneck missing"
     assert isinstance(model.bottleneck, nn.Sequential), "Bottleneck is not nn.Sequential"
 
     assert hasattr(model, 'attention'), "MultiheadAttention missing"
-    assert hasattr(model, 'conv2'), "Missing final conv2 projection layer"
+
+    # Check V6.1 Architecture
+    assert hasattr(model, 'conv2_body'), "Missing Body/Mature projection layer"
+    assert hasattr(model, 'conv2_cut'), "Missing Sniper (Cut) projection layer"
+    assert model.conv2_body.kernel_size == (5,), "Body kernel size must be 5"
+    assert model.conv2_cut.kernel_size == (1,), "Sniper kernel size must be 1"
 
     # Forward pass mock test to ensure dimensions are valid
     # Batch=2, Length=20, Embed=1536
@@ -20,8 +25,8 @@ def test_bottleneck_and_attention():
     mask = torch.ones((2, 20), dtype=torch.uint8)
     out = model(x, mask)
 
-    assert out.shape == (2, 20, 64), f"Expected [2, 20, 64] from CNN projection but got {out.shape}"
-    print("✓ Bottleneck & Attention correct.")
+    assert out.shape == (2, 20, 3), f"Expected direct [2, 20, 3] raw logits output but got {out.shape}"
+    print("✓ Bottleneck, Attention, & Decoupled Heads correct.")
 
 # 2. Test V5 Transition Constraints in CRFBaseModel
 from src.models.crf_models import CRFBaseModel

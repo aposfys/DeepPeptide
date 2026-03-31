@@ -60,11 +60,13 @@ class LSTMCNN(nn.Module):
         self.attention = nn.MultiheadAttention(embed_dim=hidden_size * 2, num_heads=4, batch_first=True, dropout=dropout_input)
         self.attn_norm = nn.LayerNorm(hidden_size * 2)
 
-        # V5.4 Reverted Split-Head complexity: Returning to the best-performing single CNN.
-        # Kernel 3 provides the perfect balance between biological context and boundary sharpness
-        # without over-parameterizing the model.
-        self.conv2 = nn.Conv1d(in_channels=hidden_size * 2, out_channels=n_filters * 2, kernel_size=3,
-                            stride=1, padding=3 // 2)
+        # V6.1 Decoupled Sniper Head:
+        # Body/Mature Head uses a wide kernel (5) to capture the biological flavor/motif.
+        self.conv2_body = nn.Conv1d(in_channels=hidden_size * 2, out_channels=2, kernel_size=5,
+                            stride=1, padding=2)
+        # Sniper Head uses a point-wise kernel (1) to output a razor-sharp Cleavage Site spike.
+        self.conv2_cut = nn.Conv1d(in_channels=hidden_size * 2, out_channels=1, kernel_size=1,
+                            stride=1, padding=0)
 
         if self.n_tissues>0:
             self.linear_tissue = nn.Linear(n_tissues, hidden_size)  # 4 -> 64
@@ -140,11 +142,16 @@ class LSTMCNN(nn.Module):
 
         packed_out = enhanced_out.permute(0, 2, 1) # [B, L, D] -> [B, D, L]
 
-        conv2_out = self.ReLU(self.conv2(packed_out))
+        # V6.1 Forward: Compute independent body and cut logits directly
+        body_logits = self.conv2_body(packed_out) # [B, 2, L]
+        cut_logits = self.conv2_cut(packed_out) # [B, 1, L]
 
-        conv2_out = conv2_out.permute(0, 2, 1) # [B, D, L] -> [B, L, D]
+        # Concatenate them into the 3 expected classes
+        logits = torch.cat([body_logits, cut_logits], dim=1) # [B, 3, L]
 
-        return conv2_out
+        logits = logits.permute(0, 2, 1) # [B, D, L] -> [B, L, 3]
+
+        return logits
 
 
 class SequenceTaggingLSTMCNN(nn.Module):

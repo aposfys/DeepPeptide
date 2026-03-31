@@ -68,11 +68,13 @@ class LSTMCNN(nn.Module):
         self.attention = nn.MultiheadAttention(embed_dim=hidden_size * 2, num_heads=4, batch_first=True, dropout=dropout_input)
         self.attn_norm = nn.LayerNorm(hidden_size * 2)
 
-        # V5.4 Reverted Split-Head complexity: Returning to the best-performing single CNN.
-        # Kernel 3 provides the perfect balance between biological context and boundary sharpness
-        # without over-parameterizing the model.
-        self.conv2 = nn.Conv1d(in_channels=hidden_size * 2, out_channels=n_filters * 2, kernel_size=3,
-                            stride=1, padding=3 // 2)
+        # V6.1 Decoupled Sniper Head:
+        # Body/Mature Head uses a wide kernel (5) to capture the biological flavor/motif.
+        self.conv2_body = nn.Conv1d(in_channels=hidden_size * 2, out_channels=2, kernel_size=5,
+                            stride=1, padding=2)
+        # Sniper Head uses a point-wise kernel (1) to output a razor-sharp Cleavage Site spike.
+        self.conv2_cut = nn.Conv1d(in_channels=hidden_size * 2, out_channels=1, kernel_size=1,
+                            stride=1, padding=0)
 
         if self.n_tissues>0:
             self.linear_tissue = nn.Linear(n_tissues, hidden_size)  # 4 -> 64
@@ -147,11 +149,16 @@ class LSTMCNN(nn.Module):
 
         packed_out = enhanced_out.permute(0, 2, 1).float() # [B, L, D] -> [B, D, L]
 
-        conv2_out = self.ReLU(self.conv2(packed_out))
+        # V6.1 Forward: Compute independent body and cut logits directly
+        body_logits = self.conv2_body(packed_out) # [B, 2, L]
+        cut_logits = self.conv2_cut(packed_out) # [B, 1, L]
 
-        conv2_out = conv2_out.permute(0, 2, 1) # [B, D, L] -> [B, L, D]
+        # Concatenate them into the 3 expected classes
+        logits = torch.cat([body_logits, cut_logits], dim=1) # [B, 3, L]
 
-        return conv2_out
+        logits = logits.permute(0, 2, 1) # [B, D, L] -> [B, L, 3]
+
+        return logits
 
 class CRFBaseModel(nn.Module):
     '''Extend this model by defining a feature_extractor.'''
@@ -166,7 +173,7 @@ class CRFBaseModel(nn.Module):
         self.max_len = 100 # V5: Expand ruler to 100 states to handle long-tail propeptides accurately
         self.min_len = 5
         self.feature_extractor = None
-        self.features_to_emissions = nn.Linear(64, num_labels)
+        self.features_to_emissions = nn.Identity() # V6.1: Neural network directly outputs the 3 classes
         self.num_states = num_states
 
         allowed_transitions, allowed_start, allowed_end = self.get_crf_constraints(self.max_len, self.min_len)
@@ -308,7 +315,7 @@ class LSTMCNNCRF(CRFBaseModel):
         super().__init__(num_labels, num_states)
 
         self.feature_extractor = LSTMCNN(input_size=input_size, dropout_input=dropout_input, n_filters=n_filters, filter_size=filter_size, hidden_size=hidden_size, num_lstm_layers=1, dropout_conv1=dropout_conv1, n_tissues=0)
-        self.features_to_emissions = nn.Linear(n_filters*2, num_labels)
+        self.features_to_emissions = nn.Identity() # V6.1 outputs the logits natively
         self.num_states = num_states
 
         allowed_transitions, allowed_start, allowed_end = self.get_crf_constraints(self.max_len, self.min_len)
