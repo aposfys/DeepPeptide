@@ -201,13 +201,22 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
         if do_train:
             pos_probs, pos_preds, crf_loss, raw_logits = model(embeddings, mask, label, skip_marginals=True)
 
-            # V6: Auxiliary Cleavage Loss
+            # V6: Auxiliary Cleavage Loss (The "Viterbi Breaker")
+            # We extract the pure Cleavage logit (Index 2) *before* CRF smoothing occurs.
             cleavage_logits = raw_logits[:, :, 2]
+
+            # The target is exactly and only the Cleavage State (100).
             cleavage_targets = (label == 100).float()
 
+            # Calculate the weighted BCE loss. This forces a massive penalty if the
+            # CNN "smears" the cleavage signal to adjacent residues, independent of
+            # the CRF's tolerance for length variations.
             raw_bce_loss = bce_criterion(cleavage_logits, cleavage_targets)
+
+            # Mask out padding sequences so they don't artificially lower the loss sum
             masked_bce_loss = (raw_bce_loss * mask.float()).sum() / mask.float().sum()
 
+            # The CRF handles global sequence validity. The BCE loss handles pixel-perfect boundaries.
             total_loss = crf_loss + (alpha * masked_bce_loss)
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)

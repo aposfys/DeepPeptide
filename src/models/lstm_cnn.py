@@ -61,10 +61,14 @@ class LSTMCNN(nn.Module):
         self.attn_norm = nn.LayerNorm(hidden_size * 2)
 
         # V6.1 Decoupled Sniper Head:
-        # Body/Mature Head uses a wide kernel (5) to capture the biological flavor/motif.
+        # Body/Mature Head uses a wide kernel (5) to capture the broad biological "flavor"
+        # and the extended -6 to +2 cleavage motifs (like RR/KR).
         self.conv2_body = nn.Conv1d(in_channels=hidden_size * 2, out_channels=2, kernel_size=5,
                             stride=1, padding=2)
-        # Sniper Head uses a point-wise kernel (1) to output a razor-sharp Cleavage Site spike.
+
+        # Sniper Head uses a point-wise kernel (1) to output a razor-sharp Dirac delta spike
+        # exactly on the Cleavage residue. Because it is pointwise, it mathematically cannot
+        # "smear" the boundary signal, forcing exact matches for the Auxiliary BCE Loss.
         self.conv2_cut = nn.Conv1d(in_channels=hidden_size * 2, out_channels=1, kernel_size=1,
                             stride=1, padding=0)
 
