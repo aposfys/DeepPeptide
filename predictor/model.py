@@ -320,3 +320,6 @@ class LSTMCNNCRF(CRFBaseModel):
 
         allowed_transitions, allowed_start, allowed_end = self.get_crf_constraints(self.max_len, self.min_len)
         self.crf = CRF(num_states, batch_first=True, allowed_transitions=allowed_transitions, allowed_start=allowed_start, allowed_end=allowed_end)
+
+    def forward(self, embeddings, mask, targets = None, skip_marginals: bool = False, top_k: int = 1):
+        return super().forward(embeddings, mask, targets=targets, skip_marginals=skip_marginals, top_k=top_k)

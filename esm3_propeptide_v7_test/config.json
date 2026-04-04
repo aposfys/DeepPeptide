@@ -1,0 +1,19 @@
+{
+   "embeddings_dir": "data/esm3_embeddings",
+   "data_file": "data/labeled_sequences_esm3.csv",
+   "partitioning_file": "data/graphpart_assignments.csv",
+   "embedding": "precomputed",
+   "embedding_dim": 1536,
+   "model": "lstmcnncrf",
+   "out_dir": "esm3_propeptide_v7_test",
+   "epochs": 1,
+   "batch_size": 16,
+   "lr": 3e-05,
+   "weight_decay": 0.05,
+   "dropout": 0.3,
+   "conv_dropout": 0.3,
+   "kernel_size": 3,
+   "num_filters": 32,
+   "hidden_size": 128,
+   "label_type": "propeptides_only"
+}

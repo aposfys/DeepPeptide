@@ -256,6 +256,8 @@ class LSTMCNNCRF(CRFBaseModel):
         allowed_transitions, allowed_start, allowed_end = self.get_crf_constraints(self.max_len, self.min_len)
         self.crf = CRF(num_states, batch_first=True, allowed_transitions=allowed_transitions, allowed_start=allowed_start, allowed_end=allowed_end)
 
+    def forward(self, embeddings, mask, targets = None, skip_marginals: bool = False, top_k: int = 1):
+        return super().forward(embeddings, mask, targets=targets, skip_marginals=skip_marginals, top_k=top_k)
 
 
 class SimpleLSTMCNNCRF(CRFBaseModel):
@@ -283,11 +285,16 @@ class SimpleLSTMCNNCRF(CRFBaseModel):
 
 
     # redefine forward because no emission repeating.
-    def forward(self, embeddings, mask, targets = None, skip_marginals: bool = False):
+    def forward(self, embeddings, mask, targets = None, skip_marginals: bool = False, top_k: int = 1):
         features = self.feature_extractor(embeddings, mask) # (batch_size, seq_len, feature_dim)
         emissions = self.features_to_emissions(features) # (batch_size, seq_len, num_labels)
         
-        viterbi_paths, probs = self.crf.decode(emissions=emissions, mask = mask.byte())
+        # SimpleLSTMCNNCRF's CRF might not cleanly support top_k depending on implementation,
+        # but we add the kwarg to prevent TypeErrors in the generalized training loop.
+        if top_k > 1:
+            viterbi_paths, probs = self.crf.decode(emissions=emissions, mask = mask.byte(), top_k=top_k)
+        else:
+            viterbi_paths, probs = self.crf.decode(emissions=emissions, mask = mask.byte())
 
         #pad the viterbi paths
         # max_pad_len = max([len(x) for x in viterbi_paths])
@@ -298,7 +305,7 @@ class SimpleLSTMCNNCRF(CRFBaseModel):
 
         if targets is not None:
             loss = self.crf(emissions = emissions, tags=targets.long(), mask = mask.byte(), reduction='mean') *-1
-            return (probs, viterbi_paths, loss)
+            return (probs, viterbi_paths, loss, emissions)
         else:
             return probs, viterbi_paths
 
