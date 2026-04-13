@@ -266,9 +266,9 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
                     if 100 in path:
                         best_path = path
                         break
-                preds.append(best_path)
+                preds.append(best_path[:seq_len])
             else:
-                preds.append(pos_preds[i])
+                preds.append(pos_preds[i][:seq_len])
 
         epoch_loss.append(total_loss.item())
 
