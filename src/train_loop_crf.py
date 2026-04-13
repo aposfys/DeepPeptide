@@ -103,20 +103,23 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
     # model.to(device)
     model = model.to(device)
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    # Reduced patience to 3 for shorter (50 epoch) runs so the LR decays fast enough to settle the loss.
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
+    # V7: Patience increased to 5
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5)
     writer = SummaryWriter(args.out_dir)
 
     previous_best = -100000000000
 
     for epoch in range(args.epochs):
 
-        train_loss, train_probs, train_preds, train_peptides, train_labels = run_dataloader(train_loader, model, optimizer, writer, do_train=True)
+        train_loss, train_crf_loss, train_focal_loss, train_probs, train_preds, train_peptides, train_labels = run_dataloader(train_loader, model, optimizer, writer, do_train=True)
+
+        print(f"Epoch {epoch} | Train CRF Loss: {train_crf_loss:.4f} | Train Focal Loss: {train_focal_loss:.4f} | Total Loss: {train_loss:.4f}")
+
         #train_metrics = compute_crf_metrics(train_probs, train_preds, train_peptides, train_labels)
         #train_metrics = metrics_fn(train_peptides, train_preds)
         #add_dict_to_writer(train_metrics, writer, global_step, prefix='Train')
 
-        valid_loss, valid_probs, valid_preds, valid_peptides, valid_labels = run_dataloader(valid_loader, model, optimizer, writer, do_train=False)
+        valid_loss, valid_crf_loss, valid_focal_loss, valid_probs, valid_preds, valid_peptides, valid_labels = run_dataloader(valid_loader, model, optimizer, writer, do_train=False)
         #valid_metrics_old = compute_crf_metrics(valid_probs, valid_preds, valid_peptides, valid_labels)#, organism=valid_loader.dataset.data['organism'])
         #valid_metrics = metrics_fn(valid_peptides, valid_preds, valid_loader.dataset.data['organism'])
         valid_metrics = compute_all_metrics(valid_probs, valid_preds, valid_labels, valid_loader.dataset.names, valid_loader.dataset.data, windows = [3])[0]
@@ -124,7 +127,7 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
         writer.add_scalar('Valid/loss', valid_loss, global_step=global_step)
 
 
-        print(f'Epoch {epoch} completed. Validation loss {valid_loss:.2f}')
+        print(f'Epoch {epoch} completed. Validation loss {valid_loss:.4f} (CRF: {valid_crf_loss:.4f}, Focal: {valid_focal_loss:.4f})')
 
         stopping_metric = valid_metrics['f1 propeptides']
 
@@ -144,7 +147,7 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
             # json.dump(valid_metrics, open(os.path.join(args.out_dir, 'valid_metrics_old.json'), 'w'), indent=2)
     
     model.load_state_dict(torch.load(os.path.join(args.out_dir, 'model.pt')))
-    test_loss, test_probs, test_preds, test_peptides, test_labels = run_dataloader(test_loader, model, optimizer, writer, do_train=False)
+    test_loss, test_crf_loss, test_focal_loss, test_probs, test_preds, test_peptides, test_labels = run_dataloader(test_loader, model, optimizer, writer, do_train=False)
     #test_metrics = compute_crf_metrics(test_probs, test_preds, test_peptides, test_labels, organism=test_loader.dataset.data['organism'])
     #test_metrics = metrics_fn(test_peptides, test_preds, test_loader.dataset.data['organism'])
     test_metrics = compute_all_metrics(test_probs, test_preds, test_labels, test_loader.dataset.names, test_loader.dataset.data, windows = [3])[0]
@@ -163,9 +166,9 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
                     optimizer: torch.optim.Optimizer, 
                     writer: SummaryWriter,
                     do_train: bool = True,
-                    alpha: float = 5.0,
-                    pos_weight: float = 50.0
-                ) -> Tuple[float, List[np.ndarray], List[List[int]], List[np.ndarray], List[np.ndarray]]:
+                    alpha: float = 1.0,
+                    pos_weight: float = 20.0
+                ) -> Tuple[float, float, float, List[np.ndarray], List[List[int]], List[np.ndarray], List[np.ndarray]]:
     '''
     Run a dataloader through the model. Collect predicted probabilitities and
     true labels. Can be used both for training and prediction.
@@ -177,6 +180,8 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
     probs = [] # per-position probabilities
     preds = [] # viterbi paths
     epoch_loss = []
+    epoch_crf_loss = []
+    epoch_focal_loss = []
 
     # V7: Focal Loss for the Auxiliary Cleavage Tracker
     # Focal Loss (gamma=2.0) exponentially penalizes "hard" examples (missed cleavages)
@@ -271,11 +276,15 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
                 preds.append(pos_preds[i][:seq_len])
 
         epoch_loss.append(total_loss.item())
+        epoch_crf_loss.append(crf_loss.item())
+        epoch_focal_loss.append(masked_focal_loss.item())
 
 
     epoch_loss = sum(epoch_loss)/len(epoch_loss)
+    epoch_crf_loss = sum(epoch_crf_loss)/len(epoch_crf_loss)
+    epoch_focal_loss = sum(epoch_focal_loss)/len(epoch_focal_loss)
 
-    return epoch_loss, probs, preds, true, labels
+    return epoch_loss, epoch_crf_loss, epoch_focal_loss, probs, preds, true, labels
 
 
 
@@ -299,8 +308,8 @@ def parse_arguments():
 
     p.add_argument('--lr', type=float, default=1e-5)
     p.add_argument('--weight_decay', type=float, default=5e-2)
-    p.add_argument('--dropout', type=float, default=0.3)
-    p.add_argument('--conv_dropout', type=float, default=0.3)
+    p.add_argument('--dropout', type=float, default=0.2)
+    p.add_argument('--conv_dropout', type=float, default=0.15)
     p.add_argument('--kernel_size', type=int, default=3)
     p.add_argument('--num_filters', type=int, default=32)
     p.add_argument('--hidden_size', type=int, default=128)

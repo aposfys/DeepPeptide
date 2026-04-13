@@ -105,14 +105,11 @@ class CRFBaseModel(nn.Module):
 
         # Inverted Class Weighting: Bias State 1 and 2 to penalize false negatives.
         # Body (Class 1) happens ~50 times. Cleavage (Class 2) happens exactly 1 time.
-        # V5.4: We returned to a robust cleavage_bias of 2.0 (e^2 ~7.4x more likely) to
-        # combat the class imbalance without artificially breaking the CRF transition matrix.
         body_bias = 0.5
-        cleavage_bias = 2.0
+        # cleavage_bias is removed; Focal Loss and CRF transitions handle class imbalance together.
 
         if emissions.shape[-1] == 3:
             emissions[:, :, 1] = emissions[:, :, 1] + body_bias
-            emissions[:, :, 2] = emissions[:, :, 2] + cleavage_bias
 
         # Keep a reference to the raw 3-class logits for the Auxiliary BCE Loss
         raw_logits = emissions.clone()
