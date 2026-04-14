@@ -102,16 +102,33 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
     # model = get_model(args)
     # model.to(device)
     model = model.to(device)
-    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+    print("\nParameter breakdown:")
+    total = 0
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            print(f"  {name}: {param.numel():>10,}")
+            total += param.numel()
+    print(f"  {'TOTAL':30s}: {total:>10,}\n")
+
+    bottleneck_params = list(model.feature_extractor.bottleneck.parameters())
+    bottleneck_ids = set(id(p) for p in bottleneck_params)
+    other_params = [p for p in model.parameters() if p.requires_grad and id(p) not in bottleneck_ids]
+
+    optimizer = AdamW([
+        {'params': bottleneck_params, 'lr': 5e-4, 'weight_decay': 0.01},
+        {'params': other_params, 'lr': 1e-4, 'weight_decay': 0.05}
+    ])
+
     # V7: Patience increased to 5
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, verbose=True)
     writer = SummaryWriter(args.out_dir)
 
     previous_best = -100000000000
 
     for epoch in range(args.epochs):
 
-        train_loss, train_crf_loss, train_focal_loss, train_probs, train_preds, train_peptides, train_labels = run_dataloader(train_loader, model, optimizer, writer, do_train=True)
+        train_loss, train_crf_loss, train_focal_loss, train_probs, train_preds, train_peptides, train_labels = run_dataloader(train_loader, model, optimizer, writer, do_train=True, alpha=args.alpha)
 
         print(f"Epoch {epoch} | Train CRF Loss: {train_crf_loss:.4f} | Train Focal Loss: {train_focal_loss:.4f} | Total Loss: {train_loss:.4f}")
 
@@ -119,7 +136,7 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
         #train_metrics = metrics_fn(train_peptides, train_preds)
         #add_dict_to_writer(train_metrics, writer, global_step, prefix='Train')
 
-        valid_loss, valid_crf_loss, valid_focal_loss, valid_probs, valid_preds, valid_peptides, valid_labels = run_dataloader(valid_loader, model, optimizer, writer, do_train=False)
+        valid_loss, valid_crf_loss, valid_focal_loss, valid_probs, valid_preds, valid_peptides, valid_labels = run_dataloader(valid_loader, model, optimizer, writer, do_train=False, alpha=args.alpha)
         #valid_metrics_old = compute_crf_metrics(valid_probs, valid_preds, valid_peptides, valid_labels)#, organism=valid_loader.dataset.data['organism'])
         #valid_metrics = metrics_fn(valid_peptides, valid_preds, valid_loader.dataset.data['organism'])
         valid_metrics = compute_all_metrics(valid_probs, valid_preds, valid_labels, valid_loader.dataset.names, valid_loader.dataset.data, windows = [3])[0]
@@ -127,7 +144,10 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
         writer.add_scalar('Valid/loss', valid_loss, global_step=global_step)
 
 
-        print(f'Epoch {epoch} completed. Validation loss {valid_loss:.4f} (CRF: {valid_crf_loss:.4f}, Focal: {valid_focal_loss:.4f})')
+        ratio = valid_crf_loss / (valid_focal_loss + 1e-8)
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"Epoch {epoch} | CRF: {valid_crf_loss:.4f} | Focal: {valid_focal_loss:.4f} | "
+              f"Ratio: {ratio:.1f}:1 | Val F1(+-3): {valid_metrics['f1 propeptides']:.4f} | LR: {current_lr:.6f}")
 
         stopping_metric = valid_metrics['f1 propeptides']
 
@@ -136,6 +156,7 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
 
         if stopping_metric > previous_best:
             previous_best = stopping_metric
+            print(f"  >>> New best checkpoint saved at epoch {epoch} (F1 +-3 = {stopping_metric:.4f})")
             best_val_metrics = valid_metrics
             pickle.dump((valid_probs, valid_preds, valid_labels, valid_loader.dataset.names), open(os.path.join(args.out_dir, 'valid_outputs.pickle'), 'wb'))
             valid_metrics['epoch'] = epoch # keep track of best early stopping.
@@ -147,17 +168,37 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
             # json.dump(valid_metrics, open(os.path.join(args.out_dir, 'valid_metrics_old.json'), 'w'), indent=2)
     
     model.load_state_dict(torch.load(os.path.join(args.out_dir, 'model.pt')))
-    test_loss, test_crf_loss, test_focal_loss, test_probs, test_preds, test_peptides, test_labels = run_dataloader(test_loader, model, optimizer, writer, do_train=False)
-    #test_metrics = compute_crf_metrics(test_probs, test_preds, test_peptides, test_labels, organism=test_loader.dataset.data['organism'])
-    #test_metrics = metrics_fn(test_peptides, test_preds, test_loader.dataset.data['organism'])
-    test_metrics = compute_all_metrics(test_probs, test_preds, test_labels, test_loader.dataset.names, test_loader.dataset.data, windows = [3])[0]
-    add_dict_to_writer(writer, test_metrics, global_step, prefix='Test')
+    test_loss, test_crf_loss, test_focal_loss, test_probs, test_preds, test_peptides, test_labels = run_dataloader(test_loader, model, optimizer, writer, do_train=False, alpha=args.alpha)
+
+    test_metrics_0 = compute_all_metrics(test_probs, test_preds, test_labels, test_loader.dataset.names, test_loader.dataset.data, windows = [0])[0]
+    test_metrics_3 = compute_all_metrics(test_probs, test_preds, test_labels, test_loader.dataset.names, test_loader.dataset.data, windows = [3])[0]
+
+    print(f"\n{'='*60}")
+    print(f"TEST RESULTS")
+    print(f"{'='*60}")
+    print(f"  Propeptide Precision (+-0): {test_metrics_0['precision propeptides']:.4f}")
+    print(f"  Propeptide Recall    (+-0): {test_metrics_0['recall propeptides']:.4f}")
+    print(f"  Propeptide F1        (+-0): {test_metrics_0['f1 propeptides']:.4f}")
+    print(f"  Propeptide Precision (+-3): {test_metrics_3['precision propeptides']:.4f}")
+    print(f"  Propeptide Recall    (+-3): {test_metrics_3['recall propeptides']:.4f}")
+    print(f"  Propeptide F1        (+-3): {test_metrics_3['f1 propeptides']:.4f}")
+    print(f"  Seq Accuracy:               {test_metrics_3['seq accuracy']:.4f}")
+    print(f"{'='*60}\n")
+
+    add_dict_to_writer(writer, test_metrics_3, global_step, prefix='Test')
     writer.add_scalar('Test/loss', test_loss, global_step=global_step)
     print('Test complete.')
-    pickle.dump((test_probs, test_preds, test_labels, test_loader.dataset.names), open(os.path.join(args.out_dir, 'test_outputs.pickle'), 'wb'))
-    json.dump(test_metrics, open(os.path.join(args.out_dir, 'test_metrics.json'), 'w'), indent=2)
 
-    return best_val_metrics, test_metrics
+    pickle.dump((test_probs, test_preds, test_labels, test_loader.dataset.names), open(os.path.join(args.out_dir, 'test_outputs.pickle'), 'wb'))
+
+    # Save both metrics
+    full_metrics = {
+        'tolerance_0': test_metrics_0,
+        'tolerance_3': test_metrics_3
+    }
+    json.dump(full_metrics, open(os.path.join(args.out_dir, 'test_metrics.json'), 'w'), indent=2)
+
+    return best_val_metrics, full_metrics
 
     
 
@@ -313,6 +354,7 @@ def parse_arguments():
     p.add_argument('--kernel_size', type=int, default=3)
     p.add_argument('--num_filters', type=int, default=32)
     p.add_argument('--hidden_size', type=int, default=128)
+    p.add_argument('--alpha', type=float, default=5.0, help='Focal Loss alpha (weight)')
 
     p.add_argument('--label_type', type=str, default='propeptides_only')
 
