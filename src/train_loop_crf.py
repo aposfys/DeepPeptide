@@ -121,7 +121,7 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
     ])
 
     # V7: Patience increased to 5
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5)
     writer = SummaryWriter(args.out_dir)
 
     previous_best = -100000000000
@@ -354,7 +354,7 @@ def parse_arguments():
     p.add_argument('--kernel_size', type=int, default=3)
     p.add_argument('--num_filters', type=int, default=32)
     p.add_argument('--hidden_size', type=int, default=128)
-    p.add_argument('--alpha', type=float, default=5.0, help='Focal Loss alpha (weight)')
+    p.add_argument('--alpha', type=float, default=1.0, help='Focal Loss alpha (weight)')
 
     p.add_argument('--label_type', type=str, default='propeptides_only')
 
