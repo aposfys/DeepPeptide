@@ -120,8 +120,34 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
         {'params': other_params, 'lr': 1e-4, 'weight_decay': 0.05}
     ])
 
-    # V7: Patience increased to 5
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5)
+    # V8: Cosine Annealing with Linear Warmup
+    from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
+    from torch.optim.swa_utils import AveragedModel, SWALR, update_bn
+
+    warmup_epochs = 5
+    total_epochs = args.epochs
+
+    warmup_scheduler = LinearLR(
+        optimizer,
+        start_factor=0.1,
+        end_factor=1.0,
+        total_iters=warmup_epochs
+    )
+    cosine_scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=total_epochs - warmup_epochs,
+        eta_min=1e-6
+    )
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_epochs]
+    )
+
+    # V8: SWA
+    swa_model = AveragedModel(model)
+    swa_start_epoch = 20
+
     writer = SummaryWriter(args.out_dir)
 
     previous_best = -100000000000
@@ -151,8 +177,11 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
 
         stopping_metric = valid_metrics['f1 propeptides']
 
-        # Step the learning rate scheduler based on the validation metric
-        scheduler.step(stopping_metric)
+        # Step the V8 sequential scheduler
+        scheduler.step()
+
+        if epoch >= swa_start_epoch:
+            swa_model.update_parameters(model)
 
         if stopping_metric > previous_best:
             previous_best = stopping_metric
@@ -167,8 +196,15 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
             # valid_metrics['epoch'] = epoch # keep track of best early stopping.
             # json.dump(valid_metrics, open(os.path.join(args.out_dir, 'valid_metrics_old.json'), 'w'), indent=2)
     
-    model.load_state_dict(torch.load(os.path.join(args.out_dir, 'model.pt')))
-    test_loss, test_crf_loss, test_focal_loss, test_probs, test_preds, test_peptides, test_labels = run_dataloader(test_loader, model, optimizer, writer, do_train=False, alpha=args.alpha)
+    if args.epochs > swa_start_epoch:
+        # V8: Use the SWA model for final test evaluation
+        update_bn(train_loader, swa_model)
+        test_model = swa_model
+    else:
+        model.load_state_dict(torch.load(os.path.join(args.out_dir, 'model.pt')))
+        test_model = model
+
+    test_loss, test_crf_loss, test_focal_loss, test_probs, test_preds, test_peptides, test_labels = run_dataloader(test_loader, test_model, optimizer, writer, do_train=False, alpha=args.alpha)
 
     test_metrics_0 = compute_all_metrics(test_probs, test_preds, test_labels, test_loader.dataset.names, test_loader.dataset.data, windows = [0])[0]
     test_metrics_3 = compute_all_metrics(test_probs, test_preds, test_labels, test_loader.dataset.names, test_loader.dataset.data, windows = [3])[0]
@@ -277,8 +313,18 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
             # The CRF handles global sequence validity. The Focal loss handles pixel-perfect boundaries.
             total_loss = crf_loss + (alpha * masked_focal_loss)
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
             total_loss.backward()
+
+            # V8: Differential Gradient Clipping
+            torch.nn.utils.clip_grad_norm_(
+                model.crf.parameters(),
+                max_norm=1.0   # tight — protects the transition matrix
+            )
+            torch.nn.utils.clip_grad_norm_(
+                model.feature_extractor.parameters(),
+                max_norm=5.0   # looser — allows LSTM/CNN to keep learning
+            )
+
             optimizer.step()
             writer.add_scalar('Train/loss', total_loss.item(), global_step=global_step)
             global_step += 1
@@ -354,7 +400,7 @@ def parse_arguments():
     p.add_argument('--kernel_size', type=int, default=3)
     p.add_argument('--num_filters', type=int, default=32)
     p.add_argument('--hidden_size', type=int, default=128)
-    p.add_argument('--alpha', type=float, default=1.0, help='Focal Loss alpha (weight)')
+    p.add_argument('--alpha', type=float, default=2.0, help='Focal Loss alpha (weight)')
 
     p.add_argument('--label_type', type=str, default='propeptides_only')
 
