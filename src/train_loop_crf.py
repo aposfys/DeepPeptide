@@ -122,7 +122,7 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
 
     # V8: Cosine Annealing with Linear Warmup
     from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
-    from torch.optim.swa_utils import AveragedModel, SWALR, update_bn
+    from torch.optim.swa_utils import AveragedModel, update_bn
 
     warmup_epochs = 5
     total_epochs = args.epochs
@@ -198,8 +198,12 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
     
     if args.epochs > swa_start_epoch:
         # V8: Use the SWA model for final test evaluation
-        update_bn(train_loader, swa_model)
-        test_model = swa_model
+        # SWA encapsulates the model under .module. The current architecture does not use BatchNorm,
+        # but if it did, standard `update_bn` would fail because it only passes sequence inputs
+        # (missing masks etc.). We skip `update_bn` and unwrap the model safely.
+        test_model = swa_model.module
+        torch.save(test_model.state_dict(), os.path.join(args.out_dir, 'swa_model.pt'))
+        print(f"  >>> Saved final SWA checkpoint to swa_model.pt")
     else:
         model.load_state_dict(torch.load(os.path.join(args.out_dir, 'model.pt')))
         test_model = model
@@ -310,8 +314,12 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
             # Mask out padding sequences so they don't artificially lower the loss sum
             masked_focal_loss = (raw_focal_loss * mask.float()).sum() / mask.float().sum()
 
+            # V8: Start Transitions Variance Regularization
+            # Penalizes the start distribution from becoming peaked, keeping the model honest about propeptide position uncertainty.
+            start_reg = 0.01 * model.crf.start_transitions.var()
+
             # The CRF handles global sequence validity. The Focal loss handles pixel-perfect boundaries.
-            total_loss = crf_loss + (alpha * masked_focal_loss)
+            total_loss = crf_loss + (alpha * masked_focal_loss) + start_reg
 
             total_loss.backward()
 
@@ -339,7 +347,10 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
                 raw_focal_loss = focal_loss_with_logits(cleavage_logits, cleavage_targets)
                 masked_focal_loss = (raw_focal_loss * mask.float()).sum() / mask.float().sum()
 
-                total_loss = crf_loss + (alpha * masked_focal_loss)
+                # V8: Add start_transitions variance regularization
+                start_reg = 0.01 * model.crf.start_transitions.var()
+
+                total_loss = crf_loss + (alpha * masked_focal_loss) + start_reg
 
         true.extend(peptides)
         # Extract unpadded sequences to properly align outputs for pickle
