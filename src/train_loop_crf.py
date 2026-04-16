@@ -314,12 +314,8 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
             # Mask out padding sequences so they don't artificially lower the loss sum
             masked_focal_loss = (raw_focal_loss * mask.float()).sum() / mask.float().sum()
 
-            # V8: Start Transitions Variance Regularization
-            # Penalizes the start distribution from becoming peaked, keeping the model honest about propeptide position uncertainty.
-            start_reg = 0.01 * model.crf.start_transitions.var()
-
             # The CRF handles global sequence validity. The Focal loss handles pixel-perfect boundaries.
-            total_loss = crf_loss + (alpha * masked_focal_loss) + start_reg
+            total_loss = crf_loss + (alpha * masked_focal_loss)
 
             total_loss.backward()
 
@@ -347,10 +343,7 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
                 raw_focal_loss = focal_loss_with_logits(cleavage_logits, cleavage_targets)
                 masked_focal_loss = (raw_focal_loss * mask.float()).sum() / mask.float().sum()
 
-                # V8: Add start_transitions variance regularization
-                start_reg = 0.01 * model.crf.start_transitions.var()
-
-                total_loss = crf_loss + (alpha * masked_focal_loss) + start_reg
+                total_loss = crf_loss + (alpha * masked_focal_loss)
 
         true.extend(peptides)
         # Extract unpadded sequences to properly align outputs for pickle

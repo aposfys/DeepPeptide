@@ -116,6 +116,9 @@ class CRFBaseModel(nn.Module):
 
         emissions = self._repeat_emissions(emissions) # (batch_size, seq_len, num_states)
         
+        # V9: Clamp emissions to safely prevent float32 overflow in log-sum-exp
+        emissions = torch.clamp(emissions, min=-15.0, max=15.0)
+
         # viterbi_paths = self.crf.decode(emissions=emissions, mask = mask.byte())
 
         viterbi_paths, path_probs = self.crf.decode(emissions=emissions, mask = mask.byte(), top_k=top_k)
@@ -286,6 +289,8 @@ class SimpleLSTMCNNCRF(CRFBaseModel):
         features = self.feature_extractor(embeddings, mask) # (batch_size, seq_len, feature_dim)
         emissions = self.features_to_emissions(features) # (batch_size, seq_len, num_labels)
         
+        emissions = torch.clamp(emissions, min=-15.0, max=15.0)
+
         # SimpleLSTMCNNCRF's CRF might not cleanly support top_k depending on implementation,
         # but we add the kwarg to prevent TypeErrors in the generalized training loop.
         if top_k > 1:

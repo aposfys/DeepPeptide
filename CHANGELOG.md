@@ -1,22 +1,90 @@
 # Changelog
 
-## [V7] - Propeptide Cleavage Site Specialist Baseline
-### Changed
-- **Removed MHSA:** The `MultiheadAttention` and its associated normalizations/residual connections were fully removed from the `LSTMCNN` feature extractor to prevent overfitting on small datasets and reduce parameter count.
-- **Dropout Adjustments:** Changed input dropout from 0.3 to 0.2, and conv dropout from 0.3 to 0.15. The ESM3 bottleneck dropout remains fixed at 0.3.
-- **Focal Loss Tuning:** Overrode Focal Loss defaults for improved transition matrix learning. Set `alpha=1.0` (down from 5.0) and `pos_weight=20.0` (down from 50.0). `gamma=2.0` is kept.
-- **Learning Rate Scheduler:** Increased `ReduceLROnPlateau` patience from 3 to 5 to allow more exploration before decaying learning rate during the 50-epoch runs.
-- **Logging:** Updated the training loop to explicitly unpack, accumulate, and separately print the `crf_loss` and the `focal_loss` at the end of each epoch for easier analysis.
+## [Unreleased] — V9
+
+### Added
+- Emissions clamping (`torch.clamp(emissions, min=-15.0, max=15.0)`) before CRF
+  forward pass to prevent log-sum-exp float32 overflow caused by auxiliary
+  Focal loss driving cleavage logits to large values.
 
 ### Removed
-- **Static Cleavage Bias:** The hardcoded `cleavage_bias = 2.0` added directly to the emissions logit was removed from `CRFBaseModel`. The Focal Loss and CRF transition constraints now handle the class imbalance without this override.
+- `start_transitions` variance regularization term (`start_reg`) from total loss.
+  Diagnostic confirmed `start_transitions` are healthy (max 0.49, well-distributed);
+  the variance penalty caused magnitude explosion by driving all 101 values
+  toward a large shared constant.
+- `inspect_start_transitions.py` diagnostic script (finding incorporated into
+  architecture understanding).
 
-## [V6.1] - Precision Propeptide Specialist
+---
+
+## [V8] — 2026-04-XX
+
 ### Added
-- **100-State Biological Ruler:** CRF architecture enforcing biological length constraints.
-- **ESM3 Hardening Bottleneck:** `Linear(1536, 256) -> LayerNorm -> ReLU -> Dropout` applied directly after frozen ESM3 embedding ingestion.
-- **Decoupled Sniper Head:** Two parallel CNN branches (`kernel=5` for propeptide flavor, `kernel=1` for sharp cleavage spikes).
-- **Auxiliary BCE/Focal Loss:** "Viterbi Breaker" loss penalizing missed single-pixel cleavage sites.
+- Linear warmup (5 epochs) + CosineAnnealingLR scheduler replacing
+  ReduceLROnPlateau, preventing reactive-only LR reduction.
+- Per-parameter-group differential gradient clipping: `crf` at max_norm=1.0,
+  `feature_extractor` at max_norm=5.0 to protect CRF transition matrix from
+  large auxiliary loss gradients.
+- Stochastic Weight Averaging (SWA) starting at epoch 20, saving
+  `swa_model.pt` at end of training.
+- `start_transitions` variance regularization to prevent positional prior
+  collapse (later removed in V9 — see above).
+- `inspect_start_transitions.py` diagnostic script.
+- Parameter breakdown logging before optimizer initialization.
+- Dual test metrics at ±0 and ±3 tolerance windows.
 
 ### Changed
-- Shifted dataset and metric scopes exclusively to propeptides, treating active peptides as mature/background (State 0).
+- Default `alpha` set to 2.0 (geometric midpoint between V7-C=1.0 and V7-A=5.0).
+- Global gradient clipping replaced with per-module clipping.
+- Verbose scheduler argument removed (deprecated in PyTorch ≥2.2).
+
+### Result
+- Best checkpoint: epoch 13, val F1 ±3 = 0.6726 (new project high).
+- CRF loss exploded after epoch 13 due to `start_reg` side effect.
+- Test F1 ±3 = 0.5123 (SWA checkpoint degraded by averaging exploded weights).
+
+---
+
+## [V7-A] — 2026-04-XX — Best stable run
+
+### Configuration
+- `alpha=5.0`, `epochs=50`, ReduceLROnPlateau scheduler.
+
+### Result
+- Test F1 ±3 = 0.609, Precision ±3 = 0.707, Recall ±3 = 0.535.
+- Best val F1 ±3 = 0.671 at epoch 15; unstable after due to Focal gradient
+  overwhelming CRF transition matrix without gradient clipping.
+- Exceeds original DeepPeptide baseline (~0.55 F1 ±3).
+
+---
+
+## [V7-C] — 2026-04-XX
+
+### Configuration
+- `alpha=1.0`, `epochs=50`.
+
+### Result
+- Test F1 ±3 = 0.558, stable training throughout 50 epochs.
+
+---
+
+## [V7-B] — 2026-04-XX
+
+### Configuration
+- `alpha=0.0` (pure CRF, no Focal loss).
+
+### Result
+- Test F1 ±3 = 0.471. Stable but plateaus early without boundary signal.
+
+---
+
+## [V6 / Initial ESM3 Migration]
+
+### Added
+- ESM3 hidden state extraction (layer 48) replacing one-hot encoding.
+- `nn.LayerNorm(1536)` as entry point to normalize ESM3 variance (σ≈243 → 1).
+- `[1:-1]` BOS/EOS token slicing for 1:1 residue-to-embedding alignment.
+- `allowed_starts` relaxed from `[0, 1]` to `list(range(51))` (Anchor Release).
+- `propeptides_only` label type: all internal peptides mapped to State 0,
+  only propeptide coordinates mapped to States 1–100.
+- 101-state CRF ruler with dedicated State 100 as cleavage site.
