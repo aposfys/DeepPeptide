@@ -90,18 +90,37 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
     global_step = 0
     train_loader, valid_loader, test_loader = get_dataloaders(args, train_partitions, valid_partitions, test_partitions)
 
-
-
-
-
-
-
-
     model = get_model(args)
     model.feature_extractor.biLSTM.flatten_parameters()
-    # model = get_model(args)
-    # model.to(device)
     model = model.to(device)
+
+    if args.evaluate_only:
+        if args.checkpoint is None:
+            raise ValueError("Must provide --checkpoint when using --evaluate_only")
+        print(f"Loading checkpoint from {args.checkpoint}...")
+        model.load_state_dict(torch.load(args.checkpoint, map_location=device))
+
+        print("Evaluating on test set...")
+        # Since we are evaluating only, use a dummy writer or just pass None,
+        # but run_dataloader expects a SummaryWriter, so we make one.
+        writer = SummaryWriter(args.out_dir)
+        test_loss, test_crf_loss, test_focal_loss, test_probs, test_preds, test_peptides, test_labels = run_dataloader(test_loader, model, None, writer, do_train=False, alpha=args.alpha)
+
+        test_metrics_0 = compute_all_metrics(test_probs, test_preds, test_labels, test_loader.dataset.names, test_loader.dataset.data, windows = [0])[0]
+        test_metrics_3 = compute_all_metrics(test_probs, test_preds, test_labels, test_loader.dataset.names, test_loader.dataset.data, windows = [3])[0]
+
+        print(f"\n{'='*60}")
+        print(f"TEST RESULTS (EVALUATE ONLY)")
+        print(f"{'='*60}")
+        print(f"  Propeptide Precision (+-0): {test_metrics_0['precision propeptides']:.4f}")
+        print(f"  Propeptide Recall    (+-0): {test_metrics_0['recall propeptides']:.4f}")
+        print(f"  Propeptide F1        (+-0): {test_metrics_0['f1 propeptides']:.4f}")
+        print(f"  Propeptide Precision (+-3): {test_metrics_3['precision propeptides']:.4f}")
+        print(f"  Propeptide Recall    (+-3): {test_metrics_3['recall propeptides']:.4f}")
+        print(f"  Propeptide F1        (+-3): {test_metrics_3['f1 propeptides']:.4f}")
+        print(f"  Seq Accuracy:               {test_metrics_3['seq accuracy']:.4f}")
+        print(f"{'='*60}\n")
+        return
 
     print("\nParameter breakdown:")
     total = 0
@@ -146,7 +165,7 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
 
     # V8: SWA
     swa_model = AveragedModel(model)
-    swa_start_epoch = 20
+    swa_start_epoch = 40
 
     writer = SummaryWriter(args.out_dir)
 
@@ -407,6 +426,9 @@ def parse_arguments():
     p.add_argument('--alpha', type=float, default=2.0, help='Focal Loss alpha (weight)')
 
     p.add_argument('--label_type', type=str, default='propeptides_only')
+
+    p.add_argument('--evaluate_only', action='store_true', help='Skip training and only evaluate a checkpoint')
+    p.add_argument('--checkpoint', type=str, default=None, help='Path to a .pt checkpoint file for evaluate_only mode')
 
     args = p.parse_args()
 

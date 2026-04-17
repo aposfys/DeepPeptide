@@ -1,6 +1,23 @@
 # Changelog
 
-## [Unreleased] — V9
+## [Unreleased] — V10
+
+### Added
+- `--evaluate_only` flag to selectively run tests on checkpoints without training.
+
+### Changed
+- Replaced the single linear projection bottleneck (`1536 -> 256`) with a `ResidualBottleneck` (+~65K params) utilizing `LayerNorm -> Down -> GELU -> Up(Residual) -> LayerNorm`.
+- Shifted Stochastic Weight Averaging (SWA) start from Epoch 20 to Epoch 40 to prevent averaging early sub-optimal weights in the new 100-epoch structure.
+
+### Configuration
+- `alpha=2.0`, `epochs=100`, SWA start `40`, `ResidualBottleneck`.
+
+### Result
+- TBD.
+
+---
+
+## [V9] — 2026-04-XX
 
 ### Added
 - Emissions clamping (`torch.clamp(emissions, min=-15.0, max=15.0)`) before CRF
@@ -14,6 +31,11 @@
   toward a large shared constant.
 - `inspect_start_transitions.py` diagnostic script (finding incorporated into
   architecture understanding).
+
+### Result
+- V9-B (`alpha=2.0`): Test F1 ±3 = 0.596 (SWA checkpoint).
+- Stable run confirmed: Clamping successfully eliminated CRF float32 overflow without hurting learning dynamics.
+- Best epoch 35 val F1 ±3 = 0.664.
 
 ---
 
