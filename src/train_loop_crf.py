@@ -141,7 +141,6 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
 
     # V8: Cosine Annealing with Linear Warmup
     from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
-    from torch.optim.swa_utils import AveragedModel, update_bn
 
     warmup_epochs = 5
     total_epochs = args.epochs
@@ -162,10 +161,6 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
         schedulers=[warmup_scheduler, cosine_scheduler],
         milestones=[warmup_epochs]
     )
-
-    # V8: SWA
-    swa_model = AveragedModel(model)
-    swa_start_epoch = 40
 
     writer = SummaryWriter(args.out_dir)
 
@@ -199,9 +194,6 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
         # Step the V8 sequential scheduler
         scheduler.step()
 
-        if epoch >= swa_start_epoch:
-            swa_model.update_parameters(model)
-
         if stopping_metric > previous_best:
             previous_best = stopping_metric
             print(f"  >>> New best checkpoint saved at epoch {epoch} (F1 +-3 = {stopping_metric:.4f})")
@@ -215,17 +207,9 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
             # valid_metrics['epoch'] = epoch # keep track of best early stopping.
             # json.dump(valid_metrics, open(os.path.join(args.out_dir, 'valid_metrics_old.json'), 'w'), indent=2)
     
-    if args.epochs > swa_start_epoch:
-        # V8: Use the SWA model for final test evaluation
-        # SWA encapsulates the model under .module. The current architecture does not use BatchNorm,
-        # but if it did, standard `update_bn` would fail because it only passes sequence inputs
-        # (missing masks etc.). We skip `update_bn` and unwrap the model safely.
-        test_model = swa_model.module
-        torch.save(test_model.state_dict(), os.path.join(args.out_dir, 'swa_model.pt'))
-        print(f"  >>> Saved final SWA checkpoint to swa_model.pt")
-    else:
-        model.load_state_dict(torch.load(os.path.join(args.out_dir, 'model.pt')))
-        test_model = model
+    # Load the best model evaluated by the validation loop
+    model.load_state_dict(torch.load(os.path.join(args.out_dir, 'model.pt')))
+    test_model = model
 
     test_loss, test_crf_loss, test_focal_loss, test_probs, test_preds, test_peptides, test_labels = run_dataloader(test_loader, test_model, optimizer, writer, do_train=False, alpha=args.alpha)
 
@@ -413,7 +397,7 @@ def parse_arguments():
     p.add_argument('--model', '-m', type=str, default='lstmcnncrf')
 
     p.add_argument('--out_dir', '-od', type=str, help='name that will be added to the runs folder output', default='train_run')
-    p.add_argument('--epochs', type=int, default=150, help='number of times to iterate through all samples')
+    p.add_argument('--epochs', type=int, default=50, help='number of times to iterate through all samples')
     p.add_argument('--batch_size', '-bs', type=int, default=16, help='samples that will be processed in parallel')
 
     p.add_argument('--lr', type=float, default=1e-5)

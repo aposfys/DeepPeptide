@@ -21,20 +21,6 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:, :x.size(1), :]
 
 
-class ResidualBottleneck(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.ln_in  = nn.LayerNorm(1536)
-        self.down   = nn.Linear(1536, 256)
-        self.act    = nn.GELU()
-        self.up     = nn.Linear(256, 256)
-        self.ln_out = nn.LayerNorm(256)
-
-    def forward(self, x):
-        h = self.act(self.down(self.ln_in(x)))
-        return self.ln_out(h + self.up(h))
-
-
 class LSTMCNN(nn.Module):
 
     def __init__(self, input_size: int = 1536, dropout_input=0.25, n_filters=32, filter_size=3, hidden_size=64, num_lstm_layers=1, dropout_conv1=0.15, n_tissues=0):
@@ -53,10 +39,9 @@ class LSTMCNN(nn.Module):
 
         self.pos_encoder = PositionalEncoding(input_size)
 
-        # V10: Residual Bottleneck replacing the single linear projection
         self.bottleneck = nn.Sequential(
-            ResidualBottleneck(),
-            nn.Dropout(p=0.3)
+            nn.Linear(1536, 256),
+            nn.LayerNorm(256)
         )
 
         self.input_dropout = nn.Dropout1d(p=dropout_input)  # keep_prob=0.8 (default 0.2)

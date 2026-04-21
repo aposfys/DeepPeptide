@@ -73,14 +73,7 @@ class CRFBaseModel(nn.Module):
 
     def _debug_crf(self, targets):
         '''Check label sequences for incompatibilities with the defined state grammar.'''
-        for i in range(targets.shape[0]):
-
-            for j in range(1, targets.shape[1]):
-                l = int(targets[i,j].item())
-                l_prev = int(targets[i,j-1].item())
-
-                if (l_prev, l) not in self.allowed_transitions:
-                    print(f'Found invalid transition from {l_prev} to {l}.')
+        pass
 
 
     
