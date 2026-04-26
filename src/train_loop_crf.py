@@ -180,7 +180,7 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
         #valid_metrics_old = compute_crf_metrics(valid_probs, valid_preds, valid_peptides, valid_labels)#, organism=valid_loader.dataset.data['organism'])
         #valid_metrics = metrics_fn(valid_peptides, valid_preds, valid_loader.dataset.data['organism'])
         valid_metrics = compute_all_metrics(valid_probs, valid_preds, valid_labels, valid_loader.dataset.names, valid_loader.dataset.data, windows = [3])[0]
-        add_dict_to_writer(writer, valid_metrics, global_step, prefix='Valid')
+        add_dict_to_writer(valid_metrics, writer, global_step, prefix='Valid')
         writer.add_scalar('Valid/loss', valid_loss, global_step=global_step)
 
 
@@ -228,7 +228,7 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
     print(f"  Seq Accuracy:               {test_metrics_3['seq accuracy']:.4f}")
     print(f"{'='*60}\n")
 
-    add_dict_to_writer(writer, test_metrics_3, global_step, prefix='Test')
+    add_dict_to_writer(test_metrics_3, writer, global_step, prefix='Test')
     writer.add_scalar('Test/loss', test_loss, global_step=global_step)
     print('Test complete.')
 
