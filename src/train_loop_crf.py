@@ -111,16 +111,16 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
 
     for epoch in range(args.epochs):
 
-        train_loss, train_probs, train_preds, train_peptides, train_labels = run_dataloader(train_loader, model, optimizer, writer, do_train=True)
+        train_loss, train_probs, train_preds, train_peptides, train_labels = run_dataloader(train_loader, model, optimizer, writer, do_train=True, alpha=args.alpha)
         #train_metrics = compute_crf_metrics(train_probs, train_preds, train_peptides, train_labels)
         #train_metrics = metrics_fn(train_peptides, train_preds)
-        #add_dict_to_writer(train_metrics, writer, global_step, prefix='Train')
+        # add_dict_to_writer(train_metrics, writer, global_step, prefix='Train')
 
-        valid_loss, valid_probs, valid_preds, valid_peptides, valid_labels = run_dataloader(valid_loader, model, optimizer, writer, do_train=False)
+        valid_loss, valid_probs, valid_preds, valid_peptides, valid_labels = run_dataloader(valid_loader, model, optimizer, writer, do_train=False, alpha=args.alpha)
         #valid_metrics_old = compute_crf_metrics(valid_probs, valid_preds, valid_peptides, valid_labels)#, organism=valid_loader.dataset.data['organism'])
         #valid_metrics = metrics_fn(valid_peptides, valid_preds, valid_loader.dataset.data['organism'])
         valid_metrics = compute_all_metrics(valid_probs, valid_preds, valid_labels, valid_loader.dataset.names, valid_loader.dataset.data, windows = [3])[0]
-        add_dict_to_writer(writer, valid_metrics, global_step, prefix='Valid')
+        add_dict_to_writer(valid_metrics, writer, global_step, prefix='Valid')
         writer.add_scalar('Valid/loss', valid_loss, global_step=global_step)
 
 
@@ -144,11 +144,11 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
             # json.dump(valid_metrics, open(os.path.join(args.out_dir, 'valid_metrics_old.json'), 'w'), indent=2)
     
     model.load_state_dict(torch.load(os.path.join(args.out_dir, 'model.pt')))
-    test_loss, test_probs, test_preds, test_peptides, test_labels = run_dataloader(test_loader, model, optimizer, writer, do_train=False)
+    test_loss, test_probs, test_preds, test_peptides, test_labels = run_dataloader(test_loader, model, optimizer, writer, do_train=False, alpha=args.alpha)
     #test_metrics = compute_crf_metrics(test_probs, test_preds, test_peptides, test_labels, organism=test_loader.dataset.data['organism'])
     #test_metrics = metrics_fn(test_peptides, test_preds, test_loader.dataset.data['organism'])
     test_metrics = compute_all_metrics(test_probs, test_preds, test_labels, test_loader.dataset.names, test_loader.dataset.data, windows = [3])[0]
-    add_dict_to_writer(writer, test_metrics, global_step, prefix='Test')
+    add_dict_to_writer(test_metrics, writer, global_step, prefix='Test')
     writer.add_scalar('Test/loss', test_loss, global_step=global_step)
     print('Test complete.')
     pickle.dump((test_probs, test_preds, test_labels, test_loader.dataset.names), open(os.path.join(args.out_dir, 'test_outputs.pickle'), 'wb'))
