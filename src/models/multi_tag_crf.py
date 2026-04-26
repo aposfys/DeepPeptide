@@ -102,7 +102,7 @@ class CRF(nn.Module):
 
     def do_transition_constraint(self):
         # inf = torch.finfo(self.start_transitions.dtype).min
-        inf = torch.as_tensor(-10000000000, dtype=self.transitions.dtype)
+        inf = torch.as_tensor(-10000.0, dtype=self.transitions.dtype)
         # TODO could make this a buffer instead of recomputing.
         inf_matrix = torch.empty(self.transitions.shape).fill_(inf).to(self.transitions.dtype).to(self.transitions.device)
         self.transitions.data = torch.where(self._constraint_mask.byte(), self.transitions, inf_matrix)

@@ -99,7 +99,7 @@ class CRF(nn.Module):
 
     def do_transition_constraint(self):
         # inf = torch.finfo(self.start_transitions.dtype).min
-        inf = torch.as_tensor(-10000000000, dtype=self.transitions.dtype)
+        inf = torch.as_tensor(-10000.0, dtype=self.transitions.dtype)
         inf_matrix = torch.empty(self.transitions.shape).fill_(inf).to(self.transitions.device)
 
         self.transitions.data = torch.where(self._constraint_mask.bool(), self.transitions, inf_matrix)

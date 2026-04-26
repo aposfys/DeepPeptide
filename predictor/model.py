@@ -232,7 +232,8 @@ class CRFBaseModel(nn.Module):
                 l_prev = int(targets[i,j-1].item())
 
                 if (l_prev, l) not in self.allowed_transitions:
-                    print(f'Found invalid transition from {l_prev} to {l}.')
+                    pass
+                    # print(f'Found invalid transition from {l_prev} to {l}.')
 
 
     
