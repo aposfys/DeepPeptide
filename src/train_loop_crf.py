@@ -98,7 +98,7 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
         if args.checkpoint is None:
             raise ValueError("Must provide --checkpoint when using --evaluate_only")
         print(f"Loading checkpoint from {args.checkpoint}...")
-        model.load_state_dict(torch.load(args.checkpoint, map_location=device))
+        model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False))
 
         print("Evaluating on test set...")
         # Since we are evaluating only, use a dummy writer or just pass None,
@@ -208,7 +208,7 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
             # json.dump(valid_metrics, open(os.path.join(args.out_dir, 'valid_metrics_old.json'), 'w'), indent=2)
     
     # Load the best model evaluated by the validation loop
-    model.load_state_dict(torch.load(os.path.join(args.out_dir, 'model.pt')))
+    model.load_state_dict(torch.load(os.path.join(args.out_dir, 'model.pt'), weights_only=False))
     test_model = model
 
     test_loss, test_crf_loss, test_focal_loss, test_probs, test_preds, test_peptides, test_labels = run_dataloader(test_loader, test_model, optimizer, writer, do_train=False, alpha=args.alpha)
