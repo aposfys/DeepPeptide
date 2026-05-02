@@ -101,16 +101,19 @@ class CRF(nn.Module):
             self.do_transition_constraint()
 
     def do_transition_constraint(self):
-        # inf = torch.finfo(self.start_transitions.dtype).min
-        inf = torch.as_tensor(-10000000000, dtype=self.transitions.dtype)
+        # Using a more reasonable penalty (-100) instead of -10000000000 to prevent log-sum-exp
+        # explosions for long sequences where forbidden paths might slightly accumulate.
+        inf = torch.as_tensor(-100.0, dtype=self.transitions.dtype)
         # TODO could make this a buffer instead of recomputing.
         inf_matrix = torch.empty(self.transitions.shape).fill_(inf).to(self.transitions.dtype).to(self.transitions.device)
-        self.transitions.data = torch.where(self._constraint_mask.byte(), self.transitions, inf_matrix)
+
+        # Note: changing .byte() to .bool() avoids uint8 deprecation warning
+        self.transitions.data = torch.where(self._constraint_mask.bool(), self.transitions, inf_matrix)
 
         if self.include_start_end_transitions:
             inf_vector = torch.empty(self.start_transitions.shape).fill_(inf).to(self.transitions.dtype).to(self.start_transitions.device)
-            self.start_transitions.data = torch.where(self._constraint_start_mask.byte(), self.start_transitions, inf_vector)
-            self.end_transitions.data = torch.where(self._constraint_end_mask.byte(), self.end_transitions, inf_vector)
+            self.start_transitions.data = torch.where(self._constraint_start_mask.bool(), self.start_transitions, inf_vector)
+            self.end_transitions.data = torch.where(self._constraint_end_mask.bool(), self.end_transitions, inf_vector)
 
     def __repr__(self) -> str:
         return f'{self.__class__.__name__}(num_tags={self.num_tags})'
@@ -327,9 +330,9 @@ class CRF(nn.Module):
         # torch.as_tensor(float("-inf"))
         # torch.as_tensor(0)
         # inf_matrix = torch.empty(emissions.shape).fill_(torch.as_tensor(float("-inf"))).to(emissions.device)
-        inf_matrix = torch.empty(emissions.shape).fill_(torch.finfo(emissions.dtype).min).to(emissions.device)
+        inf_matrix = torch.empty(emissions.shape).fill_(torch.as_tensor(-100.0, dtype=emissions.dtype)).to(emissions.device)
         # inf_matrix = torch.empty(emissions.shape).fill_(torch.as_tensor(-30.0)).to(emissions.device)
-        filtered_inputs = torch.where(tag_bitmap.byte(), emissions, inf_matrix)
+        filtered_inputs = torch.where(tag_bitmap.bool(), emissions, inf_matrix)
 
         seq_score = self._compute_log_normalizer(filtered_inputs, mask)
         # torch.index_fill(emissions, )

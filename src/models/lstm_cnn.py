@@ -39,26 +39,18 @@ class LSTMCNN(nn.Module):
 
         self.pos_encoder = PositionalEncoding(input_size)
 
-        # ESM3 Bottleneck: Linear(1536, 256) -> LayerNorm(256) -> ReLU/Dropout
         self.bottleneck = nn.Sequential(
-            nn.Linear(input_size, 256),
-            nn.LayerNorm(256),
-            nn.ReLU(),
-            nn.Dropout(p=dropout_input)
+            nn.Linear(1536, 256),
+            nn.LayerNorm(256)
         )
 
-        self.input_dropout = nn.Dropout1d(p=dropout_input)  # keep_prob=0.75
+        self.input_dropout = nn.Dropout1d(p=dropout_input)  # keep_prob=0.8 (default 0.2)
         self.conv1 = nn.Conv1d(in_channels=256, out_channels=n_filters,
                             kernel_size=filter_size, stride=1, padding=filter_size // 2) 
         self.conv1_dropout = nn.Dropout1d(p=dropout_conv1)  # keep_prob=0.85  # could this dropout be added directly to LSTM
 
         self.biLSTM = nn.LSTM(input_size=n_filters, hidden_size=hidden_size, num_layers=num_lstm_layers,
                             bias=True, batch_first=True, dropout=0.0, bidirectional=True)
-
-        # Attention Enhancement: Allows the model to look at distant contexts (like Signal Peptide)
-        # while deciding on the Propeptide cleavage site, without losing the LSTM's sequential memory.
-        self.attention = nn.MultiheadAttention(embed_dim=hidden_size * 2, num_heads=4, batch_first=True, dropout=dropout_input)
-        self.attn_norm = nn.LayerNorm(hidden_size * 2)
 
         # V6.1 Decoupled Sniper Head:
         # Body/Mature Head uses a wide kernel (5) to capture the broad biological "flavor"
@@ -133,18 +125,7 @@ class LSTMCNN(nn.Module):
         # performance loss should be marginal. Never used packing before for LM experiments anyway, worked too.
         assert bi_out.size(1) == seq_lengths.max()# == seq_lengths[0], "Pad_packed error in size dim"
 
-        # Self-Attention Enhancement
-        # Provide the boolean mask directly to `key_padding_mask`
-        # PyTorch requires True for positions to ignore (padding)
-        attn_mask = ~mask.bool()
-
-        # Self-attention over the BiLSTM outputs
-        attn_out, _ = self.attention(bi_out, bi_out, bi_out, key_padding_mask=attn_mask, need_weights=False)
-
-        # Residual connection + LayerNorm
-        enhanced_out = self.attn_norm(bi_out + attn_out)
-
-        packed_out = enhanced_out.permute(0, 2, 1) # [B, L, D] -> [B, D, L]
+        packed_out = bi_out.permute(0, 2, 1) # [B, L, D] -> [B, D, L]
 
         # V6.1 Forward: Compute independent body and cut logits directly
         body_logits = self.conv2_body(packed_out) # [B, 2, L]

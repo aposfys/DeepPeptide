@@ -11,7 +11,7 @@ def test_bottleneck_and_attention():
     assert hasattr(model, 'bottleneck'), "Bottleneck missing"
     assert isinstance(model.bottleneck, nn.Sequential), "Bottleneck is not nn.Sequential"
 
-    assert hasattr(model, 'attention'), "MultiheadAttention missing"
+    assert not hasattr(model, 'attention'), "MultiheadAttention should be removed in V7"
 
     # Check V6.1 Architecture
     assert hasattr(model, 'conv2_body'), "Missing Body/Mature projection layer"

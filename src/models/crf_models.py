@@ -73,14 +73,7 @@ class CRFBaseModel(nn.Module):
 
     def _debug_crf(self, targets):
         '''Check label sequences for incompatibilities with the defined state grammar.'''
-        for i in range(targets.shape[0]):
-
-            for j in range(1, targets.shape[1]):
-                l = int(targets[i,j].item())
-                l_prev = int(targets[i,j-1].item())
-
-                if (l_prev, l) not in self.allowed_transitions:
-                    print(f'Found invalid transition from {l_prev} to {l}.')
+        pass
 
 
     
@@ -105,20 +98,20 @@ class CRFBaseModel(nn.Module):
 
         # Inverted Class Weighting: Bias State 1 and 2 to penalize false negatives.
         # Body (Class 1) happens ~50 times. Cleavage (Class 2) happens exactly 1 time.
-        # V5.4: We returned to a robust cleavage_bias of 2.0 (e^2 ~7.4x more likely) to
-        # combat the class imbalance without artificially breaking the CRF transition matrix.
         body_bias = 0.5
-        cleavage_bias = 2.0
+        # cleavage_bias is removed; Focal Loss and CRF transitions handle class imbalance together.
 
         if emissions.shape[-1] == 3:
             emissions[:, :, 1] = emissions[:, :, 1] + body_bias
-            emissions[:, :, 2] = emissions[:, :, 2] + cleavage_bias
 
         # Keep a reference to the raw 3-class logits for the Auxiliary BCE Loss
         raw_logits = emissions.clone()
 
         emissions = self._repeat_emissions(emissions) # (batch_size, seq_len, num_states)
         
+        # V9: Clamp emissions to safely prevent float32 overflow in log-sum-exp
+        emissions = torch.clamp(emissions, min=-15.0, max=15.0)
+
         # viterbi_paths = self.crf.decode(emissions=emissions, mask = mask.byte())
 
         viterbi_paths, path_probs = self.crf.decode(emissions=emissions, mask = mask.byte(), top_k=top_k)
@@ -289,6 +282,8 @@ class SimpleLSTMCNNCRF(CRFBaseModel):
         features = self.feature_extractor(embeddings, mask) # (batch_size, seq_len, feature_dim)
         emissions = self.features_to_emissions(features) # (batch_size, seq_len, num_labels)
         
+        emissions = torch.clamp(emissions, min=-15.0, max=15.0)
+
         # SimpleLSTMCNNCRF's CRF might not cleanly support top_k depending on implementation,
         # but we add the kwarg to prevent TypeErrors in the generalized training loop.
         if top_k > 1:

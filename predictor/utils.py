@@ -268,7 +268,7 @@ def load_models(model_list):
     #from ..models.crf_models import LSTMCNNCRF
     models = []
     for path in model_list:
-        state_dict = torch.load(path, map_location='cpu')
+        state_dict = torch.load(path, map_location='cpu', weights_only=False)
         n_filters, filter_size, hidden_size = infer_sizes(state_dict)
         model = LSTMCNNCRF(n_filters = n_filters, filter_size = filter_size, hidden_size= hidden_size, num_labels=3, num_states=101)
         model.eval()

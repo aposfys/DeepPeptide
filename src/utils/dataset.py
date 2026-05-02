@@ -122,7 +122,7 @@ class PrecomputedCSVDataset(Dataset):
         seq_hash = self.hashes[index]
         #print(seq_hash, self.names[index], self.sequences[index])
         try:
-            embeddings = torch.load(os.path.join(self.embeddings_dir, f'{seq_hash}.pt'))
+            embeddings = torch.load(os.path.join(self.embeddings_dir, f'{seq_hash}.pt'), weights_only=False)
         except FileNotFoundError:
             raise FileNotFoundError(f'Could not find sequence hash {seq_hash} for {self.names[index]} in {self.embeddings_dir}.')
 
@@ -420,7 +420,7 @@ class PrecomputedCSVForCRFDataset(Dataset):
 
         seq_hash = self.hashes[index]
         try:
-            embeddings = torch.load(os.path.join(self.embeddings_dir, f'{seq_hash}.pt'))
+            embeddings = torch.load(os.path.join(self.embeddings_dir, f'{seq_hash}.pt'), weights_only=False)
         except FileNotFoundError:
             raise FileNotFoundError(f'Could not find sequence hash {seq_hash} for {self.names[index]} in {self.embeddings_dir}.')
         
@@ -486,6 +486,9 @@ class PrecomputedCSVForOverlapCRFDataset(Dataset):
         self.data = data
         self.names = data.index.tolist()
 
+        if 'coordinates' not in data.columns:
+            data['coordinates'] = ''
+
         coordinate_strings = data['coordinates'].tolist()
         propeptide_coordinate_strings = data['propeptide_coordinates'].tolist()
         coordinates = [parse_coordinate_string(x, merge_overlaps=False) for x in coordinate_strings]
@@ -541,7 +544,7 @@ class PrecomputedCSVForOverlapCRFDataset(Dataset):
         seq_hash = self.hashes[index]
         seq_len = len(self.sequences[index])
         try:
-            embeddings = torch.load(os.path.join(self.embeddings_dir, f'{seq_hash}.pt')).to(torch.float32) #esm2 comes as half
+            embeddings = torch.load(os.path.join(self.embeddings_dir, f'{seq_hash}.pt'), weights_only=False).to(torch.float32) #esm2 comes as half
         except FileNotFoundError:
             raise FileNotFoundError(f'Could not find sequence hash {seq_hash} for {self.names[index]} in {self.embeddings_dir}.')
 

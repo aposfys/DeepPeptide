@@ -90,49 +90,113 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
     global_step = 0
     train_loader, valid_loader, test_loader = get_dataloaders(args, train_partitions, valid_partitions, test_partitions)
 
-
-
-
-
-
-
-
     model = get_model(args)
     model.feature_extractor.biLSTM.flatten_parameters()
-    # model = get_model(args)
-    # model.to(device)
     model = model.to(device)
-    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    # Reduced patience to 3 for shorter (50 epoch) runs so the LR decays fast enough to settle the loss.
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
+
+    if args.evaluate_only:
+        if args.checkpoint is None:
+            raise ValueError("Must provide --checkpoint when using --evaluate_only")
+        print(f"Loading checkpoint from {args.checkpoint}...")
+        model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False))
+
+        print("Evaluating on test set...")
+        # Since we are evaluating only, use a dummy writer or just pass None,
+        # but run_dataloader expects a SummaryWriter, so we make one.
+        writer = SummaryWriter(args.out_dir)
+        test_loss, test_crf_loss, test_focal_loss, test_probs, test_preds, test_peptides, test_labels = run_dataloader(test_loader, model, None, writer, do_train=False, alpha=args.alpha)
+
+        test_metrics_0 = compute_all_metrics(test_probs, test_preds, test_labels, test_loader.dataset.names, test_loader.dataset.data, windows = [0])[0]
+        test_metrics_3 = compute_all_metrics(test_probs, test_preds, test_labels, test_loader.dataset.names, test_loader.dataset.data, windows = [3])[0]
+
+        print(f"\n{'='*60}")
+        print(f"TEST RESULTS (EVALUATE ONLY)")
+        print(f"{'='*60}")
+        print(f"  Propeptide Precision (+-0): {test_metrics_0['precision propeptides']:.4f}")
+        print(f"  Propeptide Recall    (+-0): {test_metrics_0['recall propeptides']:.4f}")
+        print(f"  Propeptide F1        (+-0): {test_metrics_0['f1 propeptides']:.4f}")
+        print(f"  Propeptide Precision (+-3): {test_metrics_3['precision propeptides']:.4f}")
+        print(f"  Propeptide Recall    (+-3): {test_metrics_3['recall propeptides']:.4f}")
+        print(f"  Propeptide F1        (+-3): {test_metrics_3['f1 propeptides']:.4f}")
+        print(f"  Seq Accuracy:               {test_metrics_3['seq accuracy']:.4f}")
+        print(f"{'='*60}\n")
+        return
+
+    print("\nParameter breakdown:")
+    total = 0
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            print(f"  {name}: {param.numel():>10,}")
+            total += param.numel()
+    print(f"  {'TOTAL':30s}: {total:>10,}\n")
+
+    bottleneck_params = list(model.feature_extractor.bottleneck.parameters())
+    bottleneck_ids = set(id(p) for p in bottleneck_params)
+    other_params = [p for p in model.parameters() if p.requires_grad and id(p) not in bottleneck_ids]
+
+    optimizer = AdamW([
+        {'params': bottleneck_params, 'lr': 5e-4, 'weight_decay': 0.01},
+        {'params': other_params, 'lr': 1e-4, 'weight_decay': 0.05}
+    ])
+
+    # V8: Cosine Annealing with Linear Warmup
+    from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
+
+    warmup_epochs = 5
+    total_epochs = args.epochs
+
+    warmup_scheduler = LinearLR(
+        optimizer,
+        start_factor=0.1,
+        end_factor=1.0,
+        total_iters=warmup_epochs
+    )
+    cosine_scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=total_epochs - warmup_epochs,
+        eta_min=1e-6
+    )
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_epochs]
+    )
+
     writer = SummaryWriter(args.out_dir)
 
     previous_best = -100000000000
 
     for epoch in range(args.epochs):
 
-        train_loss, train_probs, train_preds, train_peptides, train_labels = run_dataloader(train_loader, model, optimizer, writer, do_train=True)
+        train_loss, train_crf_loss, train_focal_loss, train_probs, train_preds, train_peptides, train_labels = run_dataloader(train_loader, model, optimizer, writer, do_train=True, alpha=args.alpha)
+
+        print(f"Epoch {epoch} | Train CRF Loss: {train_crf_loss:.4f} | Train Focal Loss: {train_focal_loss:.4f} | Total Loss: {train_loss:.4f}")
+
         #train_metrics = compute_crf_metrics(train_probs, train_preds, train_peptides, train_labels)
         #train_metrics = metrics_fn(train_peptides, train_preds)
         #add_dict_to_writer(train_metrics, writer, global_step, prefix='Train')
 
-        valid_loss, valid_probs, valid_preds, valid_peptides, valid_labels = run_dataloader(valid_loader, model, optimizer, writer, do_train=False)
+        valid_loss, valid_crf_loss, valid_focal_loss, valid_probs, valid_preds, valid_peptides, valid_labels = run_dataloader(valid_loader, model, optimizer, writer, do_train=False, alpha=args.alpha)
         #valid_metrics_old = compute_crf_metrics(valid_probs, valid_preds, valid_peptides, valid_labels)#, organism=valid_loader.dataset.data['organism'])
         #valid_metrics = metrics_fn(valid_peptides, valid_preds, valid_loader.dataset.data['organism'])
         valid_metrics = compute_all_metrics(valid_probs, valid_preds, valid_labels, valid_loader.dataset.names, valid_loader.dataset.data, windows = [3])[0]
-        add_dict_to_writer(writer, valid_metrics, global_step, prefix='Valid')
+        add_dict_to_writer(valid_metrics, writer, global_step, prefix='Valid')
         writer.add_scalar('Valid/loss', valid_loss, global_step=global_step)
 
 
-        print(f'Epoch {epoch} completed. Validation loss {valid_loss:.2f}')
+        ratio = valid_crf_loss / (valid_focal_loss + 1e-8)
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"Epoch {epoch} | CRF: {valid_crf_loss:.4f} | Focal: {valid_focal_loss:.4f} | "
+              f"Ratio: {ratio:.1f}:1 | Val F1(+-3): {valid_metrics['f1 propeptides']:.4f} | LR: {current_lr:.6f}")
 
         stopping_metric = valid_metrics['f1 propeptides']
 
-        # Step the learning rate scheduler based on the validation metric
-        scheduler.step(stopping_metric)
+        # Step the V8 sequential scheduler
+        scheduler.step()
 
         if stopping_metric > previous_best:
             previous_best = stopping_metric
+            print(f"  >>> New best checkpoint saved at epoch {epoch} (F1 +-3 = {stopping_metric:.4f})")
             best_val_metrics = valid_metrics
             pickle.dump((valid_probs, valid_preds, valid_labels, valid_loader.dataset.names), open(os.path.join(args.out_dir, 'valid_outputs.pickle'), 'wb'))
             valid_metrics['epoch'] = epoch # keep track of best early stopping.
@@ -143,18 +207,41 @@ def train(args, train_partitions: List[int] = [0,1,2], valid_partitions: List[in
             # valid_metrics['epoch'] = epoch # keep track of best early stopping.
             # json.dump(valid_metrics, open(os.path.join(args.out_dir, 'valid_metrics_old.json'), 'w'), indent=2)
     
-    model.load_state_dict(torch.load(os.path.join(args.out_dir, 'model.pt')))
-    test_loss, test_probs, test_preds, test_peptides, test_labels = run_dataloader(test_loader, model, optimizer, writer, do_train=False)
-    #test_metrics = compute_crf_metrics(test_probs, test_preds, test_peptides, test_labels, organism=test_loader.dataset.data['organism'])
-    #test_metrics = metrics_fn(test_peptides, test_preds, test_loader.dataset.data['organism'])
-    test_metrics = compute_all_metrics(test_probs, test_preds, test_labels, test_loader.dataset.names, test_loader.dataset.data, windows = [3])[0]
-    add_dict_to_writer(writer, test_metrics, global_step, prefix='Test')
+    # Load the best model evaluated by the validation loop
+    model.load_state_dict(torch.load(os.path.join(args.out_dir, 'model.pt'), weights_only=False))
+    test_model = model
+
+    test_loss, test_crf_loss, test_focal_loss, test_probs, test_preds, test_peptides, test_labels = run_dataloader(test_loader, test_model, optimizer, writer, do_train=False, alpha=args.alpha)
+
+    test_metrics_0 = compute_all_metrics(test_probs, test_preds, test_labels, test_loader.dataset.names, test_loader.dataset.data, windows = [0])[0]
+    test_metrics_3 = compute_all_metrics(test_probs, test_preds, test_labels, test_loader.dataset.names, test_loader.dataset.data, windows = [3])[0]
+
+    print(f"\n{'='*60}")
+    print(f"TEST RESULTS")
+    print(f"{'='*60}")
+    print(f"  Propeptide Precision (+-0): {test_metrics_0['precision propeptides']:.4f}")
+    print(f"  Propeptide Recall    (+-0): {test_metrics_0['recall propeptides']:.4f}")
+    print(f"  Propeptide F1        (+-0): {test_metrics_0['f1 propeptides']:.4f}")
+    print(f"  Propeptide Precision (+-3): {test_metrics_3['precision propeptides']:.4f}")
+    print(f"  Propeptide Recall    (+-3): {test_metrics_3['recall propeptides']:.4f}")
+    print(f"  Propeptide F1        (+-3): {test_metrics_3['f1 propeptides']:.4f}")
+    print(f"  Seq Accuracy:               {test_metrics_3['seq accuracy']:.4f}")
+    print(f"{'='*60}\n")
+
+    add_dict_to_writer(test_metrics_3, writer, global_step, prefix='Test')
     writer.add_scalar('Test/loss', test_loss, global_step=global_step)
     print('Test complete.')
-    pickle.dump((test_probs, test_preds, test_labels, test_loader.dataset.names), open(os.path.join(args.out_dir, 'test_outputs.pickle'), 'wb'))
-    json.dump(test_metrics, open(os.path.join(args.out_dir, 'test_metrics.json'), 'w'), indent=2)
 
-    return best_val_metrics, test_metrics
+    pickle.dump((test_probs, test_preds, test_labels, test_loader.dataset.names), open(os.path.join(args.out_dir, 'test_outputs.pickle'), 'wb'))
+
+    # Save both metrics
+    full_metrics = {
+        'tolerance_0': test_metrics_0,
+        'tolerance_3': test_metrics_3
+    }
+    json.dump(full_metrics, open(os.path.join(args.out_dir, 'test_metrics.json'), 'w'), indent=2)
+
+    return best_val_metrics, full_metrics
 
     
 
@@ -163,9 +250,9 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
                     optimizer: torch.optim.Optimizer, 
                     writer: SummaryWriter,
                     do_train: bool = True,
-                    alpha: float = 5.0,
-                    pos_weight: float = 50.0
-                ) -> Tuple[float, List[np.ndarray], List[List[int]], List[np.ndarray], List[np.ndarray]]:
+                    alpha: float = 1.0,
+                    pos_weight: float = 20.0
+                ) -> Tuple[float, float, float, List[np.ndarray], List[List[int]], List[np.ndarray], List[np.ndarray]]:
     '''
     Run a dataloader through the model. Collect predicted probabilitities and
     true labels. Can be used both for training and prediction.
@@ -177,6 +264,8 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
     probs = [] # per-position probabilities
     preds = [] # viterbi paths
     epoch_loss = []
+    epoch_crf_loss = []
+    epoch_focal_loss = []
 
     # V7: Focal Loss for the Auxiliary Cleavage Tracker
     # Focal Loss (gamma=2.0) exponentially penalizes "hard" examples (missed cleavages)
@@ -231,8 +320,18 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
             # The CRF handles global sequence validity. The Focal loss handles pixel-perfect boundaries.
             total_loss = crf_loss + (alpha * masked_focal_loss)
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
             total_loss.backward()
+
+            # V8: Differential Gradient Clipping
+            torch.nn.utils.clip_grad_norm_(
+                model.crf.parameters(),
+                max_norm=1.0   # tight — protects the transition matrix
+            )
+            torch.nn.utils.clip_grad_norm_(
+                model.feature_extractor.parameters(),
+                max_norm=5.0   # looser — allows LSTM/CNN to keep learning
+            )
+
             optimizer.step()
             writer.add_scalar('Train/loss', total_loss.item(), global_step=global_step)
             global_step += 1
@@ -266,16 +365,20 @@ def run_dataloader(loader: torch.utils.data.DataLoader,
                     if 100 in path:
                         best_path = path
                         break
-                preds.append(best_path)
+                preds.append(best_path[:seq_len])
             else:
-                preds.append(pos_preds[i])
+                preds.append(pos_preds[i][:seq_len])
 
         epoch_loss.append(total_loss.item())
+        epoch_crf_loss.append(crf_loss.item())
+        epoch_focal_loss.append(masked_focal_loss.item())
 
 
     epoch_loss = sum(epoch_loss)/len(epoch_loss)
+    epoch_crf_loss = sum(epoch_crf_loss)/len(epoch_crf_loss)
+    epoch_focal_loss = sum(epoch_focal_loss)/len(epoch_focal_loss)
 
-    return epoch_loss, probs, preds, true, labels
+    return epoch_loss, epoch_crf_loss, epoch_focal_loss, probs, preds, true, labels
 
 
 
@@ -294,18 +397,22 @@ def parse_arguments():
     p.add_argument('--model', '-m', type=str, default='lstmcnncrf')
 
     p.add_argument('--out_dir', '-od', type=str, help='name that will be added to the runs folder output', default='train_run')
-    p.add_argument('--epochs', type=int, default=150, help='number of times to iterate through all samples')
+    p.add_argument('--epochs', type=int, default=50, help='number of times to iterate through all samples')
     p.add_argument('--batch_size', '-bs', type=int, default=16, help='samples that will be processed in parallel')
 
     p.add_argument('--lr', type=float, default=1e-5)
     p.add_argument('--weight_decay', type=float, default=5e-2)
-    p.add_argument('--dropout', type=float, default=0.3)
-    p.add_argument('--conv_dropout', type=float, default=0.3)
+    p.add_argument('--dropout', type=float, default=0.2)
+    p.add_argument('--conv_dropout', type=float, default=0.15)
     p.add_argument('--kernel_size', type=int, default=3)
     p.add_argument('--num_filters', type=int, default=32)
     p.add_argument('--hidden_size', type=int, default=128)
+    p.add_argument('--alpha', type=float, default=2.0, help='Focal Loss alpha (weight)')
 
     p.add_argument('--label_type', type=str, default='propeptides_only')
+
+    p.add_argument('--evaluate_only', action='store_true', help='Skip training and only evaluate a checkpoint')
+    p.add_argument('--checkpoint', type=str, default=None, help='Path to a .pt checkpoint file for evaluate_only mode')
 
     args = p.parse_args()
 
